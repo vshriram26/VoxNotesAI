@@ -1,0 +1,15 @@
+{
+  "files": {
+    "main.css": "/VoxNotesAI/static/css/main.b9e452c7.css",
+    "main.js": "/VoxNotesAI/static/js/main.906aa258.js",
+    "static/js/453.9c779931.chunk.js": "/VoxNotesAI/static/js/453.9c779931.chunk.js",
+    "index.html": "/VoxNotesAI/index.html",
+    "main.b9e452c7.css.map": "/VoxNotesAI/static/css/main.b9e452c7.css.map",
+    "main.906aa258.js.map": "/VoxNotesAI/static/js/main.906aa258.js.map",
+    "453.9c779931.chunk.js.map": "/VoxNotesAI/static/js/453.9c779931.chunk.js.map"
+  },
+  "entrypoints": [
+    "static/css/main.b9e452c7.css",
+    "static/js/main.906aa258.js"
+  ]
+}
