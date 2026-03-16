@@ -1,19 +1,20 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { ChevronLeft, ChevronRight, Download, Eraser, FileText, FolderOpen, Home, Mic, MicOff, NotebookPen, Plus, Redo2, Save, Search, Star, Trash2, Undo2 } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Bookmark, ChevronLeft, ChevronRight, Crown, Download, EllipsisVertical, Eraser, FileText, FolderOpen, Home, Image, Keyboard, Mic, NotebookPen, Plus, Redo2, Save, Search, Settings2, Star, Trash2, Undo2 } from 'lucide-react';
 import { PDFDocument, rgb } from 'pdf-lib';
-import { GlobalWorkerOptions, getDocument, version as pdfjsVersion } from 'pdfjs-dist/legacy/build/pdf';
-import { getStoredAnnotations, listStoredAnnotations, saveStoredAnnotations } from './annotationStorage';
+import { GlobalWorkerOptions, getDocument } from 'pdfjs-dist/legacy/build/pdf';
+import { getStoredAnnotations, listStoredAnnotations, saveStoredAnnotations, saveReminder } from './annotationStorage';
 import './App.css';
 
-GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsVersion}/legacy/build/pdf.worker.min.mjs`;
+GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/legacy/build/pdf.worker.min.mjs', import.meta.url).toString();
 
 const NOTEBOOK_DOCUMENT_ID = 'notebook:quick-notes';
 const NOTEBOOK_DOCUMENT_NAME = 'Quick Notes';
 const LIBRARY_TILES = [
-  { key: 'all-notes', title: 'All Notes', icon: NotebookPen, accentClass: 'warm', badge: '3' },
+  { key: 'all-notes', title: 'All Notes', icon: Home, accentClass: 'warm', badge: '3', active: true },
   { key: 'starred', title: 'Starred', icon: Star, accentClass: 'sand' },
   { key: 'unfiled', title: 'Unfiled', icon: FolderOpen, accentClass: 'mint' },
   { key: 'trash', title: 'Trash', icon: Trash2, accentClass: 'sage' },
+  { key: 'templates', title: 'Templates', icon: Crown, accentClass: 'olive', badge: 'New' },
 ];
 const NOTEBOOK_PAGE_WIDTH = 860;
 const NOTEBOOK_PAGE_HEIGHT = 1180;
@@ -38,6 +39,12 @@ const HIGHLIGHTER_VARIANTS = [
   { id: 'mint', label: 'Mint', previewClass: 'mint', widthScale: 1.05, opacity: 0.26 },
   { id: 'chisel', label: 'Chisel', previewClass: 'chisel', widthScale: 1.3, opacity: 0.32 },
 ];
+const SHAPE_VARIANTS = [
+  { id: 'line', label: 'Line' },
+  { id: 'arrow', label: 'Arrow' },
+  { id: 'rectangle', label: 'Rectangle' },
+  { id: 'circle', label: 'Circle' },
+];
 const ERASER_SIZES = [12, 20, 32, 48];
 const FAVORITE_SLOT_COUNT = 3;
 const FAVORITES_STORAGE_KEYS = {
@@ -50,10 +57,182 @@ const TOOLBAR_EDGE_PADDING = 8;
 const TOOLBAR_TOP_PADDING = 10;
 const TOOLBAR_LEFT_OVERHANG = 10;
 const DEFAULT_TOOLBAR_POSITION = { x: -10, y: 18 };
-const VOICE_REMINDER_WORD_LIMIT = 6;
+const DOUBLE_TAP_WINDOW_MS = 280;
+const DOUBLE_TAP_MAX_DISTANCE = 24;
+const MINI_TOOLBAR_HIDE_DELAY_MS = 1400;
+const LASSO_HANDLE_HIT_RADIUS_PX = 14;
+const LASSO_HANDLE_RENDER_SIZE_PX = 10;
+const SHORTCUTS_STORAGE_KEY = 'voxnotes:keyboard-shortcuts';
+const ONBOARDING_STORAGE_KEY = 'voxnotes:onboarding-complete';
+const DEFAULT_THEME_PRESET = 'forest-calm';
+const DEFAULT_PAPER_TEMPLATE = 'ruled';
+const DEFAULT_NOTES_LAYOUT = 'tablet';
+const DEFAULT_SPLIT_VIEW = false;
+const DEFAULT_ROTATION_DEGREES = 0;
+const DEFAULT_VIEW_SCALE = 1;
+const DEFAULT_SCROLL_DIRECTION = 'vertical';
+const DEFAULT_PAGE_BACKGROUND = '#fffdf8';
+const DEFAULT_COVER_VARIANT = 'illustration-1';
+const DAILY_CARD_STORAGE_KEY = 'voxnotes:daily-card-note';
+const UI_PREFS_STORAGE_KEY = 'voxnotes:ui-preferences';
+const PAGE_TEMPLATE_OPTIONS = [
+  { id: 'blank', label: 'Blank' },
+  { id: 'ruled-fine', label: 'Fine Ruled' },
+  { id: 'ruled', label: 'Ruled' },
+  { id: 'ruled-wide', label: 'Wide Ruled' },
+  { id: 'grid', label: 'Grid' },
+  { id: 'grid-bold', label: 'Bold Grid' },
+  { id: 'dot', label: 'Dot' },
+  { id: 'dot-wide', label: 'Wide Dot' },
+  { id: 'checklist', label: 'Checklist' },
+  { id: 'cornell', label: 'Cornell' },
+  { id: 'planner', label: 'Planner' },
+  { id: 'music', label: 'Music' },
+];
+const PAGE_BACKGROUND_SWATCHES = ['#fffdf8', '#fff7ed', '#f5f3ff', '#ecfeff', '#ecfccb'];
+const COVER_VARIANTS = [
+  { id: 'illustration-1', label: 'Pattern', className: 'cover-pattern' },
+  { id: 'illustration-2', label: 'Illustration', className: 'cover-illustration' },
+  { id: 'illustration-3', label: 'Text', className: 'cover-text' },
+  { id: 'illustration-4', label: 'Coast', className: 'cover-coast' },
+  { id: 'illustration-5', label: 'Floral', className: 'cover-floral' },
+  { id: 'illustration-6', label: 'Sunset', className: 'cover-sunset' },
+  { id: 'illustration-7', label: 'Meadow', className: 'cover-meadow' },
+  { id: 'illustration-8', label: 'Forest', className: 'cover-forest' },
+  { id: 'illustration-9', label: 'Sea', className: 'cover-sea' },
+];
+const DEFAULT_SHORTCUT_CONFIG = {
+  pen: 'p',
+  highlighter: 'h',
+  eraser: 'e',
+  undo: 'z',
+  redo: 'y',
+};
+const VOICE_SCROLL_STEP_PX = 420;
+const VOICE_LANGUAGE_OPTIONS = [
+  { id: 'en-US', label: 'English' },
+  { id: 'mr-IN', label: 'Marathi' },
+];
+const VOICE_COMMAND_KEYWORD_MAPS = {
+  'en-US': {
+    pen: ['pen', 'write', 'lekhani', 'pencil'],
+    highlighter: ['highlight', 'highlighter', 'mark', 'marker'],
+    eraser: ['eraser', 'erase', 'rubber'],
+    lasso: ['lasso', 'select'],
+    shape: ['shape', 'draw shape'],
+    scrollDown: ['scroll down', 'go down'],
+    scrollUp: ['scroll up', 'go up'],
+    nextPage: ['next page', 'page next'],
+    previousPage: ['previous page', 'prev page', 'back page'],
+    jumpToPage: ['go to page', 'jump to page', 'page'],
+    remind: ['remind', 'remind me'],
+  },
+  'mr-IN': {
+    pen: ['पेन', 'लिहा', 'लेखनी'],
+    highlighter: ['हायलाइट', 'मार्क'],
+    eraser: ['इरेजर', 'खोडा', 'पुसा'],
+    lasso: ['निवडा', 'लासो'],
+    shape: ['आकार'],
+    scrollDown: ['खाली स्क्रोल', 'खाली जा'],
+    scrollUp: ['वर स्क्रोल', 'वर जा'],
+    nextPage: ['पुढचे पान', 'पुढील पान'],
+    previousPage: ['मागचे पान', 'मागील पान'],
+    jumpToPage: ['पान', 'पानावर जा'],
+    remind: ['स्मरण', 'आठवण'],
+  },
+};
+const VOICE_COLOR_MAP = {
+  red: '#dc2626',
+  orange: '#f59e0b',
+  yellow: '#eab308',
+  green: '#14b8a6',
+  blue: '#3b82f6',
+  navy: '#1d4ed8',
+  purple: '#9333ea',
+  black: '#1f2937',
+};
 
 const clampNumber = (value, minimum, maximum) => {
   return Math.min(Math.max(value, minimum), maximum);
+};
+
+const transcriptIncludesAnyKeyword = (transcript, keywords) => {
+  return keywords.some((keyword) => transcript.includes(keyword));
+};
+
+const parseReminderDueAt = (transcript) => {
+  const normalized = transcript.toLowerCase();
+  const now = new Date();
+
+  if (normalized.includes('tomorrow')) {
+    const dueAt = new Date(now);
+    dueAt.setDate(dueAt.getDate() + 1);
+    dueAt.setHours(9, 0, 0, 0);
+    return dueAt;
+  }
+
+  if (normalized.includes('उद्या')) {
+    const dueAt = new Date(now);
+    dueAt.setDate(dueAt.getDate() + 1);
+    dueAt.setHours(9, 0, 0, 0);
+    return dueAt;
+  }
+
+  const relativeMatch = normalized.match(/\bin\s+(\d{1,3})\s*(minute|minutes|hour|hours|day|days)\b/i);
+  if (relativeMatch) {
+    const amount = Number.parseInt(relativeMatch[1], 10);
+    if (!Number.isFinite(amount)) {
+      return null;
+    }
+
+    const dueAt = new Date(now);
+    const unit = relativeMatch[2].toLowerCase();
+
+    if (unit.startsWith('minute')) {
+      dueAt.setMinutes(dueAt.getMinutes() + amount);
+      return dueAt;
+    }
+
+    if (unit.startsWith('hour')) {
+      dueAt.setHours(dueAt.getHours() + amount);
+      return dueAt;
+    }
+
+    dueAt.setDate(dueAt.getDate() + amount);
+    return dueAt;
+  }
+
+  const marathiMinuteMatch = normalized.match(/(\d{1,3})\s*मिनिट/);
+  if (marathiMinuteMatch) {
+    const amount = Number.parseInt(marathiMinuteMatch[1], 10);
+    if (Number.isFinite(amount)) {
+      const dueAt = new Date(now);
+      dueAt.setMinutes(dueAt.getMinutes() + amount);
+      return dueAt;
+    }
+  }
+
+  return null;
+};
+
+const parseReminderTask = (transcript) => {
+  const normalized = transcript.trim();
+  const remindMatch = normalized.match(/(?:remind(?:\s+me)?|स्मरण|आठवण)\s+(.+)/i);
+
+  if (!remindMatch?.[1]) {
+    return null;
+  }
+
+  const taskDescription = remindMatch[1].trim();
+
+  if (!taskDescription) {
+    return null;
+  }
+
+  return {
+    taskDescription,
+    dueAt: parseReminderDueAt(transcript),
+  };
 };
 
 const getToolbarDragBounds = (frameBounds, toolbarBounds) => {
@@ -90,97 +269,6 @@ const clampToolbarPositionToBounds = (position, frameBounds, toolbarBounds) => {
     x: clampNumber(position.x, bounds.minimumX, bounds.maximumX),
     y: clampNumber(position.y, bounds.minimumY, bounds.maximumY),
   };
-};
-
-const getSpeechRecognitionConstructor = () => {
-  if (typeof window === 'undefined') {
-    return null;
-  }
-
-  return window.SpeechRecognition || window.webkitSpeechRecognition || null;
-};
-
-const sanitizeStoredReminders = (storedReminders) => {
-  if (!Array.isArray(storedReminders)) {
-    return [];
-  }
-
-  return storedReminders.reduce((nextReminders, reminder, index) => {
-    if (!reminder || typeof reminder !== 'object' || typeof reminder.text !== 'string') {
-      return nextReminders;
-    }
-
-    const text = reminder.text.trim();
-
-    if (!text) {
-      return nextReminders;
-    }
-
-    nextReminders.push({
-      id: typeof reminder.id === 'string' ? reminder.id : `reminder-${index}`,
-      text,
-      createdAt: typeof reminder.createdAt === 'string' ? reminder.createdAt : new Date().toISOString(),
-      pageNumber: Number.isFinite(reminder.pageNumber) ? reminder.pageNumber : 1,
-    });
-
-    return nextReminders;
-  }, []);
-};
-
-const extractReminderText = (transcript) => {
-  if (!transcript) {
-    return '';
-  }
-
-  const tokens = transcript.split(/\s+/).map((token) => token.trim()).filter(Boolean);
-  const reminderIndex = tokens.findIndex((token) => token.toLowerCase() === 'reminder');
-
-  if (reminderIndex === -1) {
-    return '';
-  }
-
-  const capturedWords = [];
-
-  for (let index = reminderIndex + 1; index < tokens.length && capturedWords.length < VOICE_REMINDER_WORD_LIMIT; index += 1) {
-    const cleanedToken = tokens[index].replace(/^[^\w\u0900-\u097F]+|[^\w\u0900-\u097F]+$/g, '');
-
-    if (!cleanedToken) {
-      continue;
-    }
-
-    const lowerToken = cleanedToken.toLowerCase();
-
-    if (lowerToken === 'next' || lowerToken === 'highlight' || cleanedToken === 'पुढचा') {
-      break;
-    }
-
-    capturedWords.push(cleanedToken);
-  }
-
-  return capturedWords.join(' ');
-};
-
-const sanitizeStoredVoiceNotes = (storedVoiceNotes) => {
-  if (typeof storedVoiceNotes !== 'string') {
-    return '';
-  }
-
-  return storedVoiceNotes.trim();
-};
-
-const appendDictatedText = (currentText, nextText) => {
-  const trimmedNextText = nextText.trim();
-
-  if (!trimmedNextText) {
-    return currentText;
-  }
-
-  if (!currentText.trim()) {
-    return trimmedNextText;
-  }
-
-  const separator = /[\s\n]$/.test(currentText) ? '' : ' ';
-  return `${currentText}${separator}${trimmedNextText}`;
 };
 
 const createFavoriteSlots = () => Array.from({ length: FAVORITE_SLOT_COUNT }, () => null);
@@ -266,6 +354,56 @@ const readStoredToolbarCollapsed = () => {
     return window.localStorage.getItem(TOOLBAR_COLLAPSED_STORAGE_KEY) === 'true';
   } catch (error) {
     return false;
+  }
+};
+
+const normalizeShortcutKey = (value) => {
+  if (typeof value !== 'string') {
+    return '';
+  }
+
+  return value.trim().toLowerCase().slice(0, 1);
+};
+
+const readStoredShortcutConfig = () => {
+  if (typeof window === 'undefined') {
+    return DEFAULT_SHORTCUT_CONFIG;
+  }
+
+  try {
+    const rawValue = window.localStorage.getItem(SHORTCUTS_STORAGE_KEY);
+
+    if (!rawValue) {
+      return DEFAULT_SHORTCUT_CONFIG;
+    }
+
+    const parsedValue = JSON.parse(rawValue);
+
+    if (!parsedValue || typeof parsedValue !== 'object') {
+      return DEFAULT_SHORTCUT_CONFIG;
+    }
+
+    return {
+      pen: normalizeShortcutKey(parsedValue.pen) || DEFAULT_SHORTCUT_CONFIG.pen,
+      highlighter: normalizeShortcutKey(parsedValue.highlighter) || DEFAULT_SHORTCUT_CONFIG.highlighter,
+      eraser: normalizeShortcutKey(parsedValue.eraser) || DEFAULT_SHORTCUT_CONFIG.eraser,
+      undo: normalizeShortcutKey(parsedValue.undo) || DEFAULT_SHORTCUT_CONFIG.undo,
+      redo: normalizeShortcutKey(parsedValue.redo) || DEFAULT_SHORTCUT_CONFIG.redo,
+    };
+  } catch (error) {
+    return DEFAULT_SHORTCUT_CONFIG;
+  }
+};
+
+const writeStoredShortcutConfig = (shortcutConfig) => {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(SHORTCUTS_STORAGE_KEY, JSON.stringify(shortcutConfig));
+  } catch (error) {
+    // Ignore shortcut persistence failures and keep editing smooth.
   }
 };
 
@@ -378,6 +516,7 @@ const cloneStroke = (stroke) => ({
     : [],
   tool: stroke?.tool ?? DEFAULT_TOOL,
   variant: stroke?.variant ?? 'ballpoint',
+  shapeType: stroke?.shapeType ?? 'line',
   color: stroke?.color ?? DEFAULT_COLOR,
   width: Number.isFinite(stroke?.width) ? stroke.width : TOOL_PRESETS.pen.width,
   opacity: Number.isFinite(stroke?.opacity) ? stroke.opacity : TOOL_PRESETS.pen.opacity,
@@ -474,6 +613,30 @@ const sanitizeStoredPages = (storedPages, fallbackPages) => {
   }));
 };
 
+const sanitizeStoredBookmarks = (storedBookmarks, pageCount = Number.POSITIVE_INFINITY) => {
+  if (!Array.isArray(storedBookmarks)) {
+    return [];
+  }
+
+  const deduped = new Set();
+
+  storedBookmarks.forEach((pageNumber) => {
+    if (!Number.isFinite(pageNumber)) {
+      return;
+    }
+
+    const normalizedPage = Math.trunc(pageNumber);
+
+    if (normalizedPage < 1 || normalizedPage > pageCount) {
+      return;
+    }
+
+    deduped.add(normalizedPage);
+  });
+
+  return Array.from(deduped).sort((leftPage, rightPage) => leftPage - rightPage);
+};
+
 const distanceToSegment = (point, startPoint, endPoint) => {
   const deltaX = endPoint.x - startPoint.x;
   const deltaY = endPoint.y - startPoint.y;
@@ -490,6 +653,128 @@ const distanceToSegment = (point, startPoint, endPoint) => {
   return Math.hypot(point.x - projectedX, point.y - projectedY);
 };
 
+const isPointInsidePolygon = (point, polygonPoints) => {
+  if (!Array.isArray(polygonPoints) || polygonPoints.length < 3) {
+    return false;
+  }
+
+  let inside = false;
+
+  for (let index = 0, previousIndex = polygonPoints.length - 1; index < polygonPoints.length; previousIndex = index, index += 1) {
+    const pointA = polygonPoints[index];
+    const pointB = polygonPoints[previousIndex];
+
+    const intersects = ((pointA.y > point.y) !== (pointB.y > point.y))
+      && (point.x < ((pointB.x - pointA.x) * (point.y - pointA.y)) / ((pointB.y - pointA.y) || Number.EPSILON) + pointA.x);
+
+    if (intersects) {
+      inside = !inside;
+    }
+  }
+
+  return inside;
+};
+
+const getBoundsFromPoints = (points) => {
+  if (!Array.isArray(points) || !points.length) {
+    return null;
+  }
+
+  let minimumX = Number.POSITIVE_INFINITY;
+  let minimumY = Number.POSITIVE_INFINITY;
+  let maximumX = Number.NEGATIVE_INFINITY;
+  let maximumY = Number.NEGATIVE_INFINITY;
+
+  points.forEach((point) => {
+    minimumX = Math.min(minimumX, point.x);
+    minimumY = Math.min(minimumY, point.y);
+    maximumX = Math.max(maximumX, point.x);
+    maximumY = Math.max(maximumY, point.y);
+  });
+
+  return {
+    minX: minimumX,
+    minY: minimumY,
+    maxX: maximumX,
+    maxY: maximumY,
+    width: maximumX - minimumX,
+    height: maximumY - minimumY,
+  };
+};
+
+const isPointWithinBounds = (point, bounds, padding = 0) => {
+  if (!bounds) {
+    return false;
+  }
+
+  return point.x >= bounds.minX - padding
+    && point.x <= bounds.maxX + padding
+    && point.y >= bounds.minY - padding
+    && point.y <= bounds.maxY + padding;
+};
+
+const translateStrokePoints = (stroke, deltaX, deltaY) => {
+  return cloneStroke({
+    ...stroke,
+    points: stroke.points.map((point) => ({
+      ...point,
+      x: clampNumber(point.x + deltaX, 0, 1),
+      y: clampNumber(point.y + deltaY, 0, 1),
+    })),
+  });
+};
+
+const scaleStrokePoints = (stroke, centerPoint, scaleFactor) => {
+  return cloneStroke({
+    ...stroke,
+    points: stroke.points.map((point) => ({
+      ...point,
+      x: clampNumber(centerPoint.x + (point.x - centerPoint.x) * scaleFactor, 0, 1),
+      y: clampNumber(centerPoint.y + (point.y - centerPoint.y) * scaleFactor, 0, 1),
+    })),
+  });
+};
+
+const scaleStrokePointsXY = (stroke, anchorPoint, scaleX, scaleY) => {
+  return cloneStroke({
+    ...stroke,
+    points: stroke.points.map((point) => ({
+      ...point,
+      x: clampNumber(anchorPoint.x + (point.x - anchorPoint.x) * scaleX, 0, 1),
+      y: clampNumber(anchorPoint.y + (point.y - anchorPoint.y) * scaleY, 0, 1),
+    })),
+  });
+};
+
+const getSelectionHandlePoints = (bounds) => {
+  if (!bounds) {
+    return null;
+  }
+
+  return {
+    nw: { x: bounds.minX, y: bounds.minY },
+    ne: { x: bounds.maxX, y: bounds.minY },
+    se: { x: bounds.maxX, y: bounds.maxY },
+    sw: { x: bounds.minX, y: bounds.maxY },
+  };
+};
+
+const getOppositeHandleKey = (handleKey) => {
+  if (handleKey === 'nw') {
+    return 'se';
+  }
+
+  if (handleKey === 'ne') {
+    return 'sw';
+  }
+
+  if (handleKey === 'se') {
+    return 'nw';
+  }
+
+  return 'ne';
+};
+
 function App() {
   const viewerShellRef = useRef(null);
   const overlayFrameRef = useRef(null);
@@ -501,23 +786,31 @@ function App() {
   const pageStageRefs = useRef({});
   const pageLayoutMapRef = useRef({});
   const annotationsRef = useRef({});
-  const remindersRef = useRef([]);
-  const dictatedNotesRef = useRef('');
   const renderedPdfPagesRef = useRef({});
+  const pdfRenderTasksRef = useRef({});
   const drawingStateRef = useRef({ isDrawing: false, pageNumber: null, stroke: null });
   const originalPdfBytesRef = useRef(null);
   const documentIdRef = useRef('');
   const previousInkToolRef = useRef(DEFAULT_TOOL);
+  const recentInkToolsRef = useRef(['pen', 'highlighter']);
   const toolbarDragStateRef = useRef({ active: false, startX: 0, startY: 0, originX: 0, originY: 0 });
+  const lastTapRef = useRef({ timestamp: 0, x: 0, y: 0, pointerType: '' });
+  const miniToolbarHideTimerRef = useRef(null);
+  const lassoSelectionRef = useRef(null);
+  const lassoInteractionRef = useRef({ mode: null, pageNumber: null, startPoint: null, baseStrokes: null, selectedIndexes: [] });
+  const lassoClipboardRef = useRef([]);
   const speechRecognitionRef = useRef(null);
-  const shouldKeepListeningRef = useRef(false);
+  const voiceAudioContextRef = useRef(null);
+  const voiceAudioStreamRef = useRef(null);
+  const voiceAnalyserRef = useRef(null);
+  const voiceVolumeFrameRef = useRef(null);
+  const transcriptToastTimerRef = useRef(null);
 
   const [pages, setPages] = useState(createNotebookPages(1));
   const [currentView, setCurrentView] = useState('home');
   const [libraryItems, setLibraryItems] = useState([]);
   const [isLibraryLoading, setIsLibraryLoading] = useState(true);
   const [sourceType, setSourceType] = useState('notebook');
-  const [isListening, setIsListening] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [documentName, setDocumentName] = useState(NOTEBOOK_DOCUMENT_NAME);
   const [statusMessage, setStatusMessage] = useState('Notebook ready. Start writing or upload a PDF.');
@@ -533,12 +826,11 @@ function App() {
   const [highlighterVariant, setHighlighterVariant] = useState('neon');
   const [penSize, setPenSize] = useState(TOOL_PRESETS.pen.width);
   const [highlighterSize, setHighlighterSize] = useState(TOOL_PRESETS.highlighter.width);
+  const [shapeType, setShapeType] = useState('line');
+  const [shapeSize, setShapeSize] = useState(4);
   const [eraserSize, setEraserSize] = useState(ERASER_SIZES[1]);
   const [penFavorites, setPenFavorites] = useState(() => readStoredFavorites('pen'));
   const [highlighterFavorites, setHighlighterFavorites] = useState(() => readStoredFavorites('highlighter'));
-  const [reminders, setReminders] = useState([]);
-  const [dictatedNotes, setDictatedNotes] = useState('');
-  const [liveTranscript, setLiveTranscript] = useState('');
   const [toolbarPosition, setToolbarPosition] = useState(() => readStoredToolbarPosition());
   const [isToolbarCollapsed, setIsToolbarCollapsed] = useState(() => readStoredToolbarCollapsed());
   const [autoSelectPreviousTool, setAutoSelectPreviousTool] = useState(false);
@@ -546,21 +838,223 @@ function App() {
   const [eraseHighlighterOnly, setEraseHighlighterOnly] = useState(false);
   const [erasePenOnly, setErasePenOnly] = useState(false);
   const [annotationVersion, setAnnotationVersion] = useState(0);
+  const [shortcutConfig, setShortcutConfig] = useState(() => readStoredShortcutConfig());
+  const [miniToolbar, setMiniToolbar] = useState({ visible: false, x: 0, y: 0 });
+  const [bookmarkedPages, setBookmarkedPages] = useState([]);
+  const [lassoPath, setLassoPath] = useState(null);
+  const [lassoSelection, setLassoSelection] = useState(null);
+  const [viewScale, setViewScale] = useState(DEFAULT_VIEW_SCALE);
+  const [rotationDegrees, setRotationDegrees] = useState(DEFAULT_ROTATION_DEGREES);
+  const [splitViewEnabled, setSplitViewEnabled] = useState(DEFAULT_SPLIT_VIEW);
+  const [paperTemplate, setPaperTemplate] = useState(DEFAULT_PAPER_TEMPLATE);
+  const [notesLayout, setNotesLayout] = useState(DEFAULT_NOTES_LAYOUT);
+  const [scrollDirection, setScrollDirection] = useState(DEFAULT_SCROLL_DIRECTION);
+  const [pageBackgroundColor, setPageBackgroundColor] = useState(DEFAULT_PAGE_BACKGROUND);
+  const [coverVariant, setCoverVariant] = useState(DEFAULT_COVER_VARIANT);
+  const [showNotebookSettings, setShowNotebookSettings] = useState(false);
+  const [applyTemplateToAllPages, setApplyTemplateToAllPages] = useState(true);
+  const [themePreset, setThemePreset] = useState(DEFAULT_THEME_PRESET);
+  const [librarySearchQuery, setLibrarySearchQuery] = useState('');
+  const [libraryTypeFilter, setLibraryTypeFilter] = useState('all');
+  const [libraryDateFilter, setLibraryDateFilter] = useState('all-time');
+  const [librarySmartView, setLibrarySmartView] = useState('all');
+  const [todoInput, setTodoInput] = useState('');
+  const [todoItems, setTodoItems] = useState([]);
+  const [focusSecondsLeft, setFocusSecondsLeft] = useState(25 * 60);
+  const [focusTimerRunning, setFocusTimerRunning] = useState(false);
+  const [focusModeEnabled, setFocusModeEnabled] = useState(false);
+  const [dailyDashboardNote, setDailyDashboardNote] = useState('Plan your top 3 outcomes for today.');
+  const [showOnboardingTour, setShowOnboardingTour] = useState(false);
+  const [uiScale, setUiScale] = useState(1);
+  const [largeHitTargets, setLargeHitTargets] = useState(false);
+  const [highContrastMode, setHighContrastMode] = useState(false);
+  const [toastItems, setToastItems] = useState([]);
+  const [isVoiceListening, setIsVoiceListening] = useState(false);
+  const [lastVoiceTranscript, setLastVoiceTranscript] = useState('');
+  const [voiceLanguage, setVoiceLanguage] = useState('en-US');
+  const [voiceLevel, setVoiceLevel] = useState(0);
+  const [interimVoiceTranscript, setInterimVoiceTranscript] = useState('');
+  const [voiceTranscriptToast, setVoiceTranscriptToast] = useState('');
 
   const pageCount = pages.length;
   const hasPdf = sourceType === 'pdf';
-  const latestReminder = reminders[0] ?? null;
   const selectedPenPreset = PEN_VARIANTS.find((preset) => preset.id === penVariant) ?? PEN_VARIANTS[1];
   const selectedHighlighterPreset = HIGHLIGHTER_VARIANTS.find((preset) => preset.id === highlighterVariant) ?? HIGHLIGHTER_VARIANTS[0];
+  const activeVoiceKeywordMap = VOICE_COMMAND_KEYWORD_MAPS[voiceLanguage] ?? VOICE_COMMAND_KEYWORD_MAPS['en-US'];
 
-  const handleToolSelect = useCallback((toolName) => {
+  const filteredLibraryItems = useMemo(() => {
+    const now = Date.now();
+
+    return libraryItems.filter((item) => {
+      const name = (item.documentName || '').toLowerCase();
+      const sourceTypeName = (item.sourceType || '').toLowerCase();
+      const query = librarySearchQuery.trim().toLowerCase();
+
+      if (query && !name.includes(query) && !sourceTypeName.includes(query)) {
+        return false;
+      }
+
+      if (libraryTypeFilter !== 'all' && item.sourceType !== libraryTypeFilter) {
+        return false;
+      }
+
+      const updatedAtMs = new Date(item.updatedAt || 0).getTime();
+      const ageMs = now - updatedAtMs;
+
+      if (libraryDateFilter === 'today' && ageMs > 24 * 60 * 60 * 1000) {
+        return false;
+      }
+
+      if (libraryDateFilter === 'week' && ageMs > 7 * 24 * 60 * 60 * 1000) {
+        return false;
+      }
+
+      if (librarySmartView === 'recently-annotated' && (item.strokeCount ?? 0) < 3) {
+        return false;
+      }
+
+      if (librarySmartView === 'needs-review' && (item.pageCount ?? 0) > 0 && (item.strokeCount ?? 0) === 0) {
+        return true;
+      }
+
+      if (librarySmartView === 'needs-review' && (item.strokeCount ?? 0) > 0) {
+        return false;
+      }
+
+      return true;
+    });
+  }, [libraryDateFilter, libraryItems, librarySearchQuery, librarySmartView, libraryTypeFilter]);
+
+  const clearLassoSelection = useCallback(() => {
+    lassoSelectionRef.current = null;
+    lassoInteractionRef.current = { mode: null, pageNumber: null, startPoint: null, baseStrokes: null, selectedIndexes: [] };
+    setLassoPath(null);
+    setLassoSelection(null);
+  }, []);
+
+  const computeSelectionBoundsForIndexes = useCallback((pageStrokes, strokeIndexes) => {
+    const selectedPoints = strokeIndexes.flatMap((strokeIndex) => pageStrokes[strokeIndex]?.points ?? []);
+    return getBoundsFromPoints(selectedPoints);
+  }, []);
+
+  const drawShapePrimitive = useCallback((context, shapeKind, startPoint, endPoint, strokeWidth) => {
+    const deltaX = endPoint.x - startPoint.x;
+    const deltaY = endPoint.y - startPoint.y;
+
+    context.lineWidth = strokeWidth;
+
+    if (shapeKind === 'rectangle') {
+      context.beginPath();
+      context.rect(startPoint.x, startPoint.y, deltaX, deltaY);
+      context.stroke();
+      context.closePath();
+      return;
+    }
+
+    if (shapeKind === 'circle') {
+      const centerX = startPoint.x + deltaX / 2;
+      const centerY = startPoint.y + deltaY / 2;
+      const radiusX = Math.abs(deltaX) / 2;
+      const radiusY = Math.abs(deltaY) / 2;
+
+      context.beginPath();
+      context.ellipse(centerX, centerY, Math.max(radiusX, 0.5), Math.max(radiusY, 0.5), 0, 0, Math.PI * 2);
+      context.stroke();
+      context.closePath();
+      return;
+    }
+
+    context.beginPath();
+    context.moveTo(startPoint.x, startPoint.y);
+    context.lineTo(endPoint.x, endPoint.y);
+    context.stroke();
+    context.closePath();
+
+    if (shapeKind === 'arrow') {
+      const angle = Math.atan2(deltaY, deltaX);
+      const arrowLength = Math.max(10, strokeWidth * 3.2);
+      const spread = Math.PI / 7;
+
+      context.beginPath();
+      context.moveTo(endPoint.x, endPoint.y);
+      context.lineTo(
+        endPoint.x - arrowLength * Math.cos(angle - spread),
+        endPoint.y - arrowLength * Math.sin(angle - spread),
+      );
+      context.moveTo(endPoint.x, endPoint.y);
+      context.lineTo(
+        endPoint.x - arrowLength * Math.cos(angle + spread),
+        endPoint.y - arrowLength * Math.sin(angle + spread),
+      );
+      context.stroke();
+      context.closePath();
+    }
+  }, []);
+
+  const trackInkTool = useCallback((toolName) => {
+    if (toolName !== 'pen' && toolName !== 'highlighter') {
+      return;
+    }
+
+    const [latestTool = 'pen', previousTool = latestTool === 'pen' ? 'highlighter' : 'pen'] = recentInkToolsRef.current;
+
+    if (latestTool === toolName) {
+      return;
+    }
+
+    recentInkToolsRef.current = [toolName, latestTool || previousTool];
+  }, []);
+
+  const activateTool = useCallback((toolName, openPanel = true) => {
     if (toolName !== 'eraser') {
       previousInkToolRef.current = toolName;
+      trackInkTool(toolName);
     }
 
     setActiveTool(toolName);
-    setToolPanel((currentPanel) => currentPanel === toolName ? null : toolName);
+    if (openPanel) {
+      setToolPanel((currentPanel) => currentPanel === toolName ? null : toolName);
+      return;
+    }
+
+    setToolPanel(null);
+  }, [trackInkTool]);
+
+  const swapRecentInkTools = useCallback(() => {
+    const [latestTool = 'pen', previousTool = latestTool === 'pen' ? 'highlighter' : 'pen'] = recentInkToolsRef.current;
+    const targetTool = activeTool === latestTool ? previousTool : latestTool;
+
+    activateTool(targetTool, true);
+    setStatusMessage(`Quick switch: ${targetTool} ready.`);
+  }, [activateTool, activeTool]);
+
+  const showMiniToolbarAtPointer = useCallback((event) => {
+    if (miniToolbarHideTimerRef.current) {
+      window.clearTimeout(miniToolbarHideTimerRef.current);
+      miniToolbarHideTimerRef.current = null;
+    }
+
+    setMiniToolbar({
+      visible: true,
+      x: event.clientX + 16,
+      y: event.clientY + 16,
+    });
   }, []);
+
+  const scheduleMiniToolbarHide = useCallback(() => {
+    if (miniToolbarHideTimerRef.current) {
+      window.clearTimeout(miniToolbarHideTimerRef.current);
+    }
+
+    miniToolbarHideTimerRef.current = window.setTimeout(() => {
+      setMiniToolbar((currentValue) => ({ ...currentValue, visible: false }));
+      miniToolbarHideTimerRef.current = null;
+    }, MINI_TOOLBAR_HIDE_DELAY_MS);
+  }, []);
+
+  const handleToolSelect = useCallback((toolName) => {
+    activateTool(toolName, true);
+  }, [activateTool]);
 
   const buildStrokeSegments = useCallback((stroke, shouldErasePoint) => {
     const nextSegments = [];
@@ -592,12 +1086,7 @@ function App() {
     }
 
     setInkColor(favorite.color);
-    if (toolName !== 'eraser') {
-      previousInkToolRef.current = toolName;
-    }
-
-    setActiveTool(toolName);
-    setToolPanel(toolName);
+    activateTool(toolName, true);
 
     if (toolName === 'pen') {
       setPenVariant(favorite.variant);
@@ -609,7 +1098,7 @@ function App() {
     setHighlighterVariant(favorite.variant);
     setHighlighterSize(favorite.size);
     setStatusMessage(`Applied highlighter favorite ${favorite.variant}.`);
-  }, []);
+  }, [activateTool]);
 
   const saveFavorite = useCallback((toolName, slotIndex) => {
     if (toolName === 'pen') {
@@ -689,8 +1178,7 @@ function App() {
     nextDocumentName = documentName,
     nextDocumentId = documentIdRef.current,
     nextSourceBytes = originalPdfBytesRef.current,
-    nextReminders = remindersRef.current,
-    nextDictatedNotes = dictatedNotesRef.current,
+    nextBookmarks = bookmarkedPages,
   ) => {
     if (!nextDocumentId) {
       return;
@@ -707,8 +1195,7 @@ function App() {
         pages: nextPages,
         annotations: nextAnnotations,
         sourceBytes: nextSourceType === 'pdf' && nextSourceBytes ? nextSourceBytes : null,
-        reminders: nextReminders,
-        voiceNotes: nextDictatedNotes,
+        bookmarks: nextBookmarks,
       });
       setStorageLabel('IndexedDB primary storage');
       setLastSavedAt(formatSavedTime(updatedAt));
@@ -717,7 +1204,7 @@ function App() {
       setStorageLabel('Unable to persist session');
       setStatusMessage('IndexedDB is unavailable in this browser session.');
     }
-  }, [documentName, pages, refreshLibrary, sourceType]);
+  }, [bookmarkedPages, documentName, pages, refreshLibrary, sourceType]);
 
   const ensurePageAnnotations = useCallback((pageNumber) => {
     if (!annotationsRef.current[pageNumber]) {
@@ -774,6 +1261,22 @@ function App() {
 
     applyStrokeStyle(context, stroke);
 
+    if (stroke.tool === 'shape') {
+      const startPoint = stroke.points[0];
+      const endPoint = stroke.points[stroke.points.length - 1] ?? startPoint;
+
+      drawShapePrimitive(
+        context,
+        stroke.shapeType ?? 'line',
+        { x: startPoint.x * width, y: startPoint.y * height },
+        { x: endPoint.x * width, y: endPoint.y * height },
+        Math.max(stroke.width, 1),
+      );
+
+      context.globalAlpha = 1;
+      return;
+    }
+
     if (stroke.points.length === 1) {
       const point = stroke.points[0];
       const pointWidth = stroke.width * getPointPressureMultiplier(stroke, point);
@@ -818,7 +1321,7 @@ function App() {
     }
 
     context.globalAlpha = 1;
-  }, [applyStrokeStyle, getPageSize]);
+  }, [applyStrokeStyle, drawShapePrimitive, getPageSize]);
 
   const redrawInkPage = useCallback((pageNumber) => {
     const canvas = inkCanvasRefs.current[pageNumber];
@@ -835,7 +1338,58 @@ function App() {
     pageAnnotations.forEach((stroke) => {
       drawStroke(context, pageNumber, stroke);
     });
-  }, [clearCanvas, drawStroke]);
+
+    if (lassoSelectionRef.current?.pageNumber === pageNumber && lassoSelectionRef.current.bounds) {
+      const bounds = lassoSelectionRef.current.bounds;
+      const { width, height } = getPageSize(pageNumber);
+      const handles = getSelectionHandlePoints(bounds);
+
+      context.save();
+      context.setLineDash([8, 6]);
+      context.lineWidth = 1.5;
+      context.strokeStyle = '#f59e0b';
+      context.globalAlpha = 0.9;
+      context.strokeRect(
+        bounds.minX * width,
+        bounds.minY * height,
+        Math.max(bounds.width * width, 1),
+        Math.max(bounds.height * height, 1),
+      );
+
+      if (handles) {
+        const halfHandleSize = LASSO_HANDLE_RENDER_SIZE_PX / 2;
+
+        context.setLineDash([]);
+        context.fillStyle = '#f8fafc';
+        context.strokeStyle = '#0f172a';
+        Object.values(handles).forEach((handlePoint) => {
+          const handleX = handlePoint.x * width - halfHandleSize;
+          const handleY = handlePoint.y * height - halfHandleSize;
+          context.fillRect(handleX, handleY, LASSO_HANDLE_RENDER_SIZE_PX, LASSO_HANDLE_RENDER_SIZE_PX);
+          context.strokeRect(handleX, handleY, LASSO_HANDLE_RENDER_SIZE_PX, LASSO_HANDLE_RENDER_SIZE_PX);
+        });
+      }
+      context.restore();
+    }
+
+    if (lassoPath?.pageNumber === pageNumber && Array.isArray(lassoPath.points) && lassoPath.points.length > 1) {
+      const { width, height } = getPageSize(pageNumber);
+
+      context.save();
+      context.setLineDash([6, 4]);
+      context.lineWidth = 1.5;
+      context.strokeStyle = '#38bdf8';
+      context.globalAlpha = 0.9;
+      context.beginPath();
+      context.moveTo(lassoPath.points[0].x * width, lassoPath.points[0].y * height);
+      for (let index = 1; index < lassoPath.points.length; index += 1) {
+        context.lineTo(lassoPath.points[index].x * width, lassoPath.points[index].y * height);
+      }
+      context.stroke();
+      context.closePath();
+      context.restore();
+    }
+  }, [clearCanvas, drawStroke, getPageSize, lassoPath]);
 
   const syncInkCanvas = useCallback((pageNumber, width, height) => {
     const canvas = inkCanvasRefs.current[pageNumber];
@@ -871,6 +1425,22 @@ function App() {
     canvas.style.height = `${height}px`;
   }, []);
 
+  const cancelPdfRenderTask = useCallback(async (pageNumber) => {
+    const activeRenderEntry = pdfRenderTasksRef.current[pageNumber];
+
+    if (!activeRenderEntry) {
+      return;
+    }
+
+    activeRenderEntry.task.cancel();
+
+    try {
+      await activeRenderEntry.promise;
+    } catch (error) {
+      // Cancellation is expected during rapid navigation and rerenders.
+    }
+  }, []);
+
   const renderPdfPage = useCallback(async ({ pageNumber, width, height }) => {
     const pdf = pdfDocumentRef.current;
     const canvas = pdfCanvasRefs.current[pageNumber];
@@ -880,9 +1450,19 @@ function App() {
     }
 
     const signature = `${width}x${height}`;
+    const activeRenderEntry = pdfRenderTasksRef.current[pageNumber];
 
-    if (renderedPdfPagesRef.current[pageNumber] === signature) {
+    if (activeRenderEntry?.signature === signature) {
+      await activeRenderEntry.promise;
       return;
+    }
+
+    if (!activeRenderEntry && renderedPdfPagesRef.current[pageNumber] === signature) {
+      return;
+    }
+
+    if (activeRenderEntry) {
+      await cancelPdfRenderTask(pageNumber);
     }
 
     const page = await pdf.getPage(pageNumber);
@@ -903,9 +1483,34 @@ function App() {
     context.setTransform(ratio, 0, 0, ratio, 0, 0);
     context.clearRect(0, 0, viewport.width, viewport.height);
 
-    await page.render({ canvasContext: context, viewport }).promise;
-    renderedPdfPagesRef.current[pageNumber] = signature;
-  }, []);
+    const renderTask = page.render({ canvasContext: context, viewport });
+    const renderEntry = {
+      signature,
+      task: renderTask,
+      promise: null,
+    };
+
+    renderEntry.promise = renderTask.promise
+      .then(() => {
+        if (pdfRenderTasksRef.current[pageNumber] === renderEntry) {
+          renderedPdfPagesRef.current[pageNumber] = signature;
+        }
+      })
+      .catch((error) => {
+        if (error?.name !== 'RenderingCancelledException') {
+          throw error;
+        }
+      })
+      .finally(() => {
+        if (pdfRenderTasksRef.current[pageNumber] === renderEntry) {
+          delete pdfRenderTasksRef.current[pageNumber];
+        }
+      });
+
+    pdfRenderTasksRef.current[pageNumber] = renderEntry;
+
+    await renderEntry.promise;
+  }, [cancelPdfRenderTask]);
 
   const loadNotebookSession = useCallback(async ({ documentId = NOTEBOOK_DOCUMENT_ID, notebookName = NOTEBOOK_DOCUMENT_NAME, fresh = false } = {}) => {
     const fallbackPages = createNotebookPages(1);
@@ -920,20 +1525,25 @@ function App() {
     }
 
     const nextPages = sanitizeStoredPages(record?.pages, fallbackPages).map((page) => ({ ...page, kind: 'blank' }));
+    const nextBookmarks = sanitizeStoredBookmarks(record?.bookmarks, nextPages.length);
 
     pdfDocumentRef.current = null;
     originalPdfBytesRef.current = null;
     documentIdRef.current = documentId;
     annotationsRef.current = sanitizeStoredAnnotations(record?.annotations ?? {});
-    remindersRef.current = sanitizeStoredReminders(record?.reminders);
-    dictatedNotesRef.current = sanitizeStoredVoiceNotes(record?.voiceNotes);
+    Object.values(pdfRenderTasksRef.current).forEach((renderEntry) => {
+      renderEntry?.task?.cancel();
+    });
+    pdfRenderTasksRef.current = {};
     renderedPdfPagesRef.current = {};
+    lassoSelectionRef.current = null;
+    lassoInteractionRef.current = { mode: null, pageNumber: null, startPoint: null, baseStrokes: null, selectedIndexes: [] };
     setPages(nextPages);
     setSourceType('notebook');
     setDocumentName(notebookName);
-    setReminders(remindersRef.current);
-    setDictatedNotes(dictatedNotesRef.current);
-    setLiveTranscript('');
+    setLassoPath(null);
+    setLassoSelection(null);
+    setBookmarkedPages(nextBookmarks);
     setActivePageNumber(1);
     setPageJumpValue('1');
     setLastSavedAt(formatSavedTime(record?.updatedAt));
@@ -943,7 +1553,7 @@ function App() {
     setCurrentView('editor');
     updateRenderWindow(1);
     if (fresh) {
-      persistSession({}, nextPages, 'notebook', notebookName, documentId, null, [], '');
+      persistSession({}, nextPages, 'notebook', notebookName, documentId, null, []);
     }
   }, [persistSession, updateRenderWindow]);
 
@@ -983,19 +1593,25 @@ function App() {
         }
       }
 
+      const nextBookmarks = sanitizeStoredBookmarks(record?.bookmarks, nextPages.length);
+
       pdfDocumentRef.current = pdf;
       originalPdfBytesRef.current = pdfBytes;
       documentIdRef.current = documentId;
       annotationsRef.current = sanitizeStoredAnnotations(record?.annotations ?? {});
-      remindersRef.current = sanitizeStoredReminders(record?.reminders);
-      dictatedNotesRef.current = sanitizeStoredVoiceNotes(record?.voiceNotes);
+      Object.values(pdfRenderTasksRef.current).forEach((renderEntry) => {
+        renderEntry?.task?.cancel();
+      });
+      pdfRenderTasksRef.current = {};
       renderedPdfPagesRef.current = {};
+      lassoSelectionRef.current = null;
+      lassoInteractionRef.current = { mode: null, pageNumber: null, startPoint: null, baseStrokes: null, selectedIndexes: [] };
       setPages(nextPages);
       setSourceType('pdf');
       setDocumentName(fileName);
-      setReminders(remindersRef.current);
-      setDictatedNotes(dictatedNotesRef.current);
-      setLiveTranscript('');
+      setLassoPath(null);
+      setLassoSelection(null);
+      setBookmarkedPages(nextBookmarks);
       setActivePageNumber(1);
       setPageJumpValue('1');
       setLastSavedAt(formatSavedTime(record?.updatedAt));
@@ -1004,55 +1620,148 @@ function App() {
       setAnnotationVersion((currentValue) => currentValue + 1);
       setCurrentView('editor');
       updateRenderWindow(1);
-      persistSession(record?.annotations ?? {}, nextPages, 'pdf', fileName, documentId, pdfBytes, remindersRef.current, dictatedNotesRef.current);
+      persistSession(record?.annotations ?? {}, nextPages, 'pdf', fileName, documentId, pdfBytes, nextBookmarks);
     } catch (error) {
       setStatusMessage('Unable to render that PDF. Try another file.');
     }
   }, [buildPdfPages, persistSession, updateRenderWindow]);
 
-  const storeDictatedNotes = useCallback((nextVoiceNotes) => {
-    dictatedNotesRef.current = nextVoiceNotes;
-    setDictatedNotes(nextVoiceNotes);
-    persistSession(
-      annotationsRef.current,
-      pages,
-      sourceType,
-      documentName,
-      documentIdRef.current,
-      originalPdfBytesRef.current,
-      remindersRef.current,
-      nextVoiceNotes,
-    );
-  }, [documentName, pages, persistSession, sourceType]);
-
-  const handleDictatedNotesChange = useCallback((event) => {
-    storeDictatedNotes(event.target.value);
-  }, [storeDictatedNotes]);
-
-  const saveReminder = useCallback((reminderText) => {
-    const trimmedText = reminderText.trim();
-
-    if (!trimmedText) {
-      return false;
-    }
-
-    const reminder = {
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      text: trimmedText,
-      createdAt: new Date().toISOString(),
-      pageNumber: activePageNumber,
-    };
-    const nextReminders = [reminder, ...remindersRef.current].slice(0, 12);
-
-    remindersRef.current = nextReminders;
-    setReminders(nextReminders);
-    persistSession(annotationsRef.current, pages, sourceType, documentName, documentIdRef.current, originalPdfBytesRef.current, nextReminders);
-    return true;
-  }, [activePageNumber, documentName, pages, persistSession, sourceType]);
-
   useEffect(() => {
     refreshLibrary();
   }, [refreshLibrary]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const onboardingComplete = window.localStorage.getItem(ONBOARDING_STORAGE_KEY) === 'true';
+    const storedDailyCard = window.localStorage.getItem(DAILY_CARD_STORAGE_KEY);
+    const storedPrefsRaw = window.localStorage.getItem(UI_PREFS_STORAGE_KEY);
+
+    if (storedDailyCard) {
+      setDailyDashboardNote(storedDailyCard);
+    }
+
+    if (storedPrefsRaw) {
+      try {
+        const storedPrefs = JSON.parse(storedPrefsRaw);
+
+        if (typeof storedPrefs.paperTemplate === 'string') {
+          setPaperTemplate(storedPrefs.paperTemplate);
+        }
+
+        if (storedPrefs.notesLayout === 'classic' || storedPrefs.notesLayout === 'tablet') {
+          setNotesLayout(storedPrefs.notesLayout);
+        }
+
+        if (storedPrefs.scrollDirection === 'horizontal' || storedPrefs.scrollDirection === 'vertical') {
+          setScrollDirection(storedPrefs.scrollDirection);
+        }
+
+        if (typeof storedPrefs.pageBackgroundColor === 'string') {
+          setPageBackgroundColor(storedPrefs.pageBackgroundColor);
+        }
+
+        if (typeof storedPrefs.coverVariant === 'string') {
+          setCoverVariant(storedPrefs.coverVariant);
+        }
+
+        if (typeof storedPrefs.applyTemplateToAllPages === 'boolean') {
+          setApplyTemplateToAllPages(storedPrefs.applyTemplateToAllPages);
+        }
+
+        if (Number.isFinite(storedPrefs.uiScale)) {
+          setUiScale(clampNumber(storedPrefs.uiScale, 0.85, 1.25));
+        }
+
+        if (typeof storedPrefs.largeHitTargets === 'boolean') {
+          setLargeHitTargets(storedPrefs.largeHitTargets);
+        }
+
+        if (typeof storedPrefs.highContrastMode === 'boolean') {
+          setHighContrastMode(storedPrefs.highContrastMode);
+        }
+      } catch (error) {
+        // Ignore malformed preferences and keep defaults.
+      }
+    }
+
+    setShowOnboardingTour(!onboardingComplete);
+  }, []);
+
+  useEffect(() => {
+    if (!focusTimerRunning) {
+      return undefined;
+    }
+
+    const timerId = window.setInterval(() => {
+      setFocusSecondsLeft((currentValue) => {
+        if (currentValue <= 1) {
+          window.clearInterval(timerId);
+          setFocusTimerRunning(false);
+          setStatusMessage('Focus timer completed. Nice work.');
+          return 0;
+        }
+
+        return currentValue - 1;
+      });
+    }, 1000);
+
+    return () => {
+      window.clearInterval(timerId);
+    };
+  }, [focusTimerRunning]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    window.localStorage.setItem(DAILY_CARD_STORAGE_KEY, dailyDashboardNote);
+  }, [dailyDashboardNote]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    window.localStorage.setItem(UI_PREFS_STORAGE_KEY, JSON.stringify({
+      themePreset,
+      paperTemplate,
+      notesLayout,
+      scrollDirection,
+      pageBackgroundColor,
+      coverVariant,
+      applyTemplateToAllPages,
+      uiScale,
+      largeHitTargets,
+      highContrastMode,
+    }));
+  }, [applyTemplateToAllPages, coverVariant, highContrastMode, largeHitTargets, notesLayout, pageBackgroundColor, paperTemplate, scrollDirection, themePreset, uiScale]);
+
+  useEffect(() => {
+    if (!statusMessage) {
+      return;
+    }
+
+    const now = Date.now();
+    const nextToast = { id: `${now}-${Math.random().toString(36).slice(2, 7)}`, message: statusMessage };
+
+    setToastItems((currentToasts) => [...currentToasts, nextToast].slice(-4));
+
+    const dismissTimerId = window.setTimeout(() => {
+      setToastItems((currentToasts) => currentToasts.filter((toast) => toast.id !== nextToast.id));
+    }, 2800);
+
+    return () => {
+      window.clearTimeout(dismissTimerId);
+    };
+  }, [statusMessage]);
+
+  useEffect(() => {
+    lassoSelectionRef.current = lassoSelection;
+  }, [lassoSelection]);
 
   useEffect(() => {
     pageLayoutMapRef.current = pages.reduce((nextPages, page) => {
@@ -1080,11 +1789,12 @@ function App() {
         return;
       }
 
+      cancelPdfRenderTask(pageNumber);
       releaseCanvasResources(inkCanvasRefs.current[pageNumber], width, height);
       releaseCanvasResources(pdfCanvasRefs.current[pageNumber], width, height);
       delete renderedPdfPagesRef.current[pageNumber];
     });
-  }, [pages, releaseCanvasResources, renderWindowPageNumbers, syncInkCanvas]);
+  }, [cancelPdfRenderTask, pages, releaseCanvasResources, renderWindowPageNumbers, syncInkCanvas]);
 
   useEffect(() => {
     try {
@@ -1163,6 +1873,18 @@ function App() {
       window.removeEventListener('resize', normalizeToolbarPosition);
     };
   }, [isToolbarCollapsed, toolPanel, currentView]);
+
+  useEffect(() => {
+    return () => {
+      if (miniToolbarHideTimerRef.current) {
+        window.clearTimeout(miniToolbarHideTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    writeStoredShortcutConfig(shortcutConfig);
+  }, [shortcutConfig]);
 
   useEffect(() => {
     if (!hasPdf) {
@@ -1279,19 +2001,47 @@ function App() {
     };
 
     annotationsRef.current = nextAnnotations;
+    if (lassoSelectionRef.current?.pageNumber === pageNumber) {
+      lassoSelectionRef.current = null;
+      setLassoSelection(null);
+      setLassoPath(null);
+    }
     redrawInkPage(pageNumber);
     persistSession(nextAnnotations);
     setAnnotationVersion((currentValue) => currentValue + 1);
     setStatusMessage(`Erased ink on page ${pageNumber}.`);
     if (autoSelectPreviousTool) {
-      setActiveTool(previousInkToolRef.current);
-      setToolPanel(null);
+      activateTool(previousInkToolRef.current, false);
     }
-  }, [autoSelectPreviousTool, buildStrokeSegments, ensurePageAnnotations, eraseEntireStroke, eraseHighlighterOnly, erasePenOnly, eraserSize, getPageSize, persistSession, redrawInkPage]);
+  }, [activateTool, autoSelectPreviousTool, buildStrokeSegments, ensurePageAnnotations, eraseEntireStroke, eraseHighlighterOnly, erasePenOnly, eraserSize, getPageSize, persistSession, redrawInkPage]);
 
   const handlePointerDown = useCallback((pageNumber) => (event) => {
     if (event.pointerType === 'mouse' && event.button !== 0) {
       return;
+    }
+
+    showMiniToolbarAtPointer(event);
+
+    if (event.pointerType !== 'mouse') {
+      const now = Date.now();
+      const previousTap = lastTapRef.current;
+      const tapDistance = Math.hypot(event.clientX - previousTap.x, event.clientY - previousTap.y);
+      const isDoubleTap = previousTap.pointerType === event.pointerType
+        && now - previousTap.timestamp <= DOUBLE_TAP_WINDOW_MS
+        && tapDistance <= DOUBLE_TAP_MAX_DISTANCE;
+
+      lastTapRef.current = {
+        timestamp: now,
+        x: event.clientX,
+        y: event.clientY,
+        pointerType: event.pointerType,
+      };
+
+      if (isDoubleTap) {
+        swapRecentInkTools();
+        drawingStateRef.current = { isDrawing: false, pageNumber: null, stroke: null };
+        return;
+      }
     }
 
     const pageLayout = pageLayoutMapRef.current[pageNumber];
@@ -1304,8 +2054,74 @@ function App() {
     const point = getPoint(pageNumber, event);
     const normalizedPoint = getNormalizedPoint(pageLayout, point, event);
 
+    if (activeTool === 'lasso') {
+      const pageAnnotations = ensurePageAnnotations(pageNumber);
+      const existingSelection = lassoSelectionRef.current;
+      const existingHandles = getSelectionHandlePoints(existingSelection?.bounds);
+      const hitHandleKey = existingHandles
+        ? Object.entries(existingHandles).find(([, handlePoint]) => {
+          const distanceFromHandle = Math.hypot(
+            (handlePoint.x - normalizedPoint.x) * pageLayout.width,
+            (handlePoint.y - normalizedPoint.y) * pageLayout.height,
+          );
+
+          return distanceFromHandle <= LASSO_HANDLE_HIT_RADIUS_PX;
+        })?.[0] ?? null
+        : null;
+      const canMoveSelection = existingSelection?.pageNumber === pageNumber
+        && Array.isArray(existingSelection.strokeIndexes)
+        && existingSelection.strokeIndexes.length > 0
+        && isPointWithinBounds(normalizedPoint, existingSelection.bounds, 0.012);
+
+      if (hitHandleKey && existingSelection?.pageNumber === pageNumber && existingHandles) {
+        lassoInteractionRef.current = {
+          mode: 'resize',
+          pageNumber,
+          startPoint: normalizedPoint,
+          baseStrokes: pageAnnotations.strokes.map((stroke) => cloneStroke(stroke)),
+          selectedIndexes: [...existingSelection.strokeIndexes],
+          baseBounds: existingSelection.bounds,
+          handleKey: hitHandleKey,
+          anchorPoint: existingHandles[getOppositeHandleKey(hitHandleKey)],
+          baseCorner: existingHandles[hitHandleKey],
+          pathPoints: null,
+        };
+        setStatusMessage('Resizing selected strokes...');
+      } else if (canMoveSelection) {
+        lassoInteractionRef.current = {
+          mode: 'move',
+          pageNumber,
+          startPoint: normalizedPoint,
+          baseStrokes: pageAnnotations.strokes.map((stroke) => cloneStroke(stroke)),
+          selectedIndexes: [...existingSelection.strokeIndexes],
+          pathPoints: null,
+        };
+        setStatusMessage('Moving selected strokes...');
+      } else {
+        const initialPath = [normalizedPoint];
+
+        lassoSelectionRef.current = null;
+        setLassoSelection(null);
+        setLassoPath({ pageNumber, points: initialPath });
+        lassoInteractionRef.current = {
+          mode: 'lasso',
+          pageNumber,
+          startPoint: normalizedPoint,
+          baseStrokes: null,
+          selectedIndexes: [],
+          pathPoints: initialPath,
+        };
+        setStatusMessage('Draw a loop around strokes to select them.');
+      }
+
+      redrawInkPage(pageNumber);
+      setActivePageNumber(pageNumber);
+      return;
+    }
+
     if (activeTool === 'eraser') {
       eraseStrokeAtPoint(pageNumber, normalizedPoint);
+      scheduleMiniToolbarHide();
       return;
     }
 
@@ -1323,13 +2139,16 @@ function App() {
     const stroke = {
       points: [normalizedPoint],
       tool: activeTool,
-      variant: activeTool === 'highlighter' ? selectedHighlighterPreset.id : selectedPenPreset.id,
+      variant: activeTool === 'highlighter' ? selectedHighlighterPreset.id : activeTool === 'shape' ? 'shape' : selectedPenPreset.id,
+      shapeType,
       color: inkColor,
-      width: activeTool === 'highlighter'
+      width: activeTool === 'shape'
+        ? Math.max(shapeSize, 1)
+        : activeTool === 'highlighter'
         ? Math.max(highlighterSize * selectedHighlighterPreset.widthScale, TOOL_PRESETS.highlighter.width * 0.8)
         : Math.max(penSize * selectedPenPreset.widthScale, 1.5),
-      opacity: activeTool === 'highlighter' ? selectedHighlighterPreset.opacity : selectedPenPreset.opacity,
-      pressureEnabled: event.pointerType === 'pen' && Number.isFinite(event.pressure) && event.pressure > 0,
+      opacity: activeTool === 'shape' ? 1 : activeTool === 'highlighter' ? selectedHighlighterPreset.opacity : selectedPenPreset.opacity,
+      pressureEnabled: activeTool !== 'shape' && event.pointerType === 'pen' && Number.isFinite(event.pressure) && event.pressure > 0,
     };
 
     drawingStateRef.current = { isDrawing: true, pageNumber, stroke };
@@ -1337,31 +2156,199 @@ function App() {
     redrawInkPage(pageNumber);
     drawStroke(context, pageNumber, stroke);
     setActivePageNumber(pageNumber);
-  }, [activeTool, drawStroke, eraseStrokeAtPoint, getNormalizedPoint, getPoint, highlighterSize, inkColor, penSize, redrawInkPage, renderWindowPageNumbers, selectedHighlighterPreset, selectedPenPreset, syncInkCanvas, updateRenderWindow]);
+  }, [activeTool, drawStroke, ensurePageAnnotations, eraseStrokeAtPoint, getNormalizedPoint, getPoint, highlighterSize, inkColor, penSize, redrawInkPage, renderWindowPageNumbers, scheduleMiniToolbarHide, selectedHighlighterPreset, selectedPenPreset, shapeSize, shapeType, showMiniToolbarAtPointer, swapRecentInkTools, syncInkCanvas, updateRenderWindow]);
 
   const handlePointerMove = useCallback((pageNumber) => (event) => {
+    const interaction = lassoInteractionRef.current;
+    const pageLayout = pageLayoutMapRef.current[pageNumber];
+
+    if (!pageLayout) {
+      return;
+    }
+
+    const point = getPoint(pageNumber, event);
+    const normalizedPoint = getNormalizedPoint(pageLayout, point, event);
+
+    if (activeTool === 'lasso' && interaction.pageNumber === pageNumber && interaction.mode) {
+      if (interaction.mode === 'lasso') {
+        const nextPath = [...(interaction.pathPoints ?? []), normalizedPoint];
+        interaction.pathPoints = nextPath;
+        setLassoPath({ pageNumber, points: nextPath });
+        redrawInkPage(pageNumber);
+        return;
+      }
+
+      if (interaction.mode === 'move' && interaction.startPoint && Array.isArray(interaction.baseStrokes)) {
+        const deltaX = normalizedPoint.x - interaction.startPoint.x;
+        const deltaY = normalizedPoint.y - interaction.startPoint.y;
+        const selectedIndexes = new Set(interaction.selectedIndexes);
+        const nextStrokes = interaction.baseStrokes.map((stroke, strokeIndex) => {
+          if (!selectedIndexes.has(strokeIndex)) {
+            return cloneStroke(stroke);
+          }
+
+          return translateStrokePoints(stroke, deltaX, deltaY);
+        });
+
+        const nextAnnotations = {
+          ...annotationsRef.current,
+          [pageNumber]: {
+            ...ensurePageAnnotations(pageNumber),
+            strokes: nextStrokes,
+          },
+        };
+
+        annotationsRef.current = nextAnnotations;
+        const nextBounds = computeSelectionBoundsForIndexes(nextStrokes, interaction.selectedIndexes);
+        const nextSelection = {
+          pageNumber,
+          strokeIndexes: [...interaction.selectedIndexes],
+          bounds: nextBounds,
+        };
+
+        lassoSelectionRef.current = nextSelection;
+        setLassoSelection(nextSelection);
+        redrawInkPage(pageNumber);
+        return;
+      }
+
+      if (
+        interaction.mode === 'resize'
+        && interaction.anchorPoint
+        && interaction.baseCorner
+        && Array.isArray(interaction.baseStrokes)
+      ) {
+        const baseDeltaX = interaction.baseCorner.x - interaction.anchorPoint.x;
+        const baseDeltaY = interaction.baseCorner.y - interaction.anchorPoint.y;
+        const rawScaleX = Math.abs(baseDeltaX) < Number.EPSILON
+          ? 1
+          : (normalizedPoint.x - interaction.anchorPoint.x) / baseDeltaX;
+        const rawScaleY = Math.abs(baseDeltaY) < Number.EPSILON
+          ? 1
+          : (normalizedPoint.y - interaction.anchorPoint.y) / baseDeltaY;
+        const scaleX = clampNumber(Math.abs(rawScaleX), 0.1, 4);
+        const scaleY = clampNumber(Math.abs(rawScaleY), 0.1, 4);
+        const selectedIndexes = new Set(interaction.selectedIndexes);
+        const nextStrokes = interaction.baseStrokes.map((stroke, strokeIndex) => {
+          if (!selectedIndexes.has(strokeIndex)) {
+            return cloneStroke(stroke);
+          }
+
+          return scaleStrokePointsXY(stroke, interaction.anchorPoint, scaleX, scaleY);
+        });
+        const nextAnnotations = {
+          ...annotationsRef.current,
+          [pageNumber]: {
+            ...ensurePageAnnotations(pageNumber),
+            strokes: nextStrokes,
+          },
+        };
+
+        annotationsRef.current = nextAnnotations;
+        const nextBounds = computeSelectionBoundsForIndexes(nextStrokes, interaction.selectedIndexes);
+        const nextSelection = {
+          pageNumber,
+          strokeIndexes: [...interaction.selectedIndexes],
+          bounds: nextBounds,
+        };
+
+        lassoSelectionRef.current = nextSelection;
+        setLassoSelection(nextSelection);
+        redrawInkPage(pageNumber);
+        return;
+      }
+    }
+
     if (!drawingStateRef.current.isDrawing || drawingStateRef.current.pageNumber !== pageNumber) {
       return;
     }
 
     const context = inkCanvasRefs.current[pageNumber]?.getContext('2d');
-    const pageLayout = pageLayoutMapRef.current[pageNumber];
 
-    if (!context || !pageLayout) {
+    if (!context) {
       return;
     }
 
-    const point = getPoint(pageNumber, event);
+    if (drawingStateRef.current.stroke.tool === 'shape') {
+      const originPoint = drawingStateRef.current.stroke.points[0];
+      drawingStateRef.current.stroke.points = [originPoint, normalizedPoint];
+    } else {
+      drawingStateRef.current.stroke.points.push(normalizedPoint);
+      drawingStateRef.current.stroke.pressureEnabled = drawingStateRef.current.stroke.pressureEnabled
+        || (event.pointerType === 'pen' && Number.isFinite(event.pressure) && event.pressure > 0);
+    }
 
-    drawingStateRef.current.stroke.points.push(getNormalizedPoint(pageLayout, point, event));
-    drawingStateRef.current.stroke.pressureEnabled = drawingStateRef.current.stroke.pressureEnabled
-      || (event.pointerType === 'pen' && Number.isFinite(event.pressure) && event.pressure > 0);
+    setMiniToolbar((currentValue) => ({
+      ...currentValue,
+      visible: true,
+      x: event.clientX + 16,
+      y: event.clientY + 16,
+    }));
 
     redrawInkPage(pageNumber);
     drawStroke(context, pageNumber, drawingStateRef.current.stroke);
-  }, [drawStroke, getNormalizedPoint, getPoint, redrawInkPage]);
+  }, [activeTool, computeSelectionBoundsForIndexes, drawStroke, ensurePageAnnotations, getNormalizedPoint, getPoint, redrawInkPage]);
 
   const handlePointerUp = useCallback((pageNumber) => (event) => {
+    const interaction = lassoInteractionRef.current;
+
+    if (activeTool === 'lasso' && interaction.pageNumber === pageNumber && interaction.mode) {
+      if (interaction.mode === 'lasso') {
+        const polygonPoints = interaction.pathPoints ?? [];
+        const pageStrokes = ensurePageAnnotations(pageNumber).strokes;
+        const selectedIndexes = polygonPoints.length < 3
+          ? []
+          : pageStrokes.reduce((nextIndexes, stroke, strokeIndex) => {
+            const isSelected = stroke.points.some((strokePoint) => isPointInsidePolygon(strokePoint, polygonPoints));
+
+            if (isSelected) {
+              nextIndexes.push(strokeIndex);
+            }
+
+            return nextIndexes;
+          }, []);
+
+        if (selectedIndexes.length) {
+          const nextSelection = {
+            pageNumber,
+            strokeIndexes: selectedIndexes,
+            bounds: computeSelectionBoundsForIndexes(pageStrokes, selectedIndexes),
+          };
+
+          lassoSelectionRef.current = nextSelection;
+          setLassoSelection(nextSelection);
+          setStatusMessage(`Selected ${selectedIndexes.length} stroke${selectedIndexes.length > 1 ? 's' : ''}. Drag to move or use resize.`);
+        } else {
+          lassoSelectionRef.current = null;
+          setLassoSelection(null);
+          setStatusMessage('No strokes found inside that lasso.');
+        }
+
+        setLassoPath(null);
+        lassoInteractionRef.current = { mode: null, pageNumber: null, startPoint: null, baseStrokes: null, selectedIndexes: [] };
+        redrawInkPage(pageNumber);
+        return;
+      }
+
+      if (interaction.mode === 'move') {
+        lassoInteractionRef.current = { mode: null, pageNumber: null, startPoint: null, baseStrokes: null, selectedIndexes: [] };
+        persistSession(annotationsRef.current);
+        setAnnotationVersion((currentValue) => currentValue + 1);
+        scheduleMiniToolbarHide();
+        setStatusMessage('Moved selected strokes.');
+        return;
+      }
+
+      if (interaction.mode === 'resize') {
+        lassoInteractionRef.current = { mode: null, pageNumber: null, startPoint: null, baseStrokes: null, selectedIndexes: [] };
+        persistSession(annotationsRef.current);
+        setAnnotationVersion((currentValue) => currentValue + 1);
+        scheduleMiniToolbarHide();
+        setStatusMessage('Resized selected strokes from corner handle.');
+        return;
+      }
+    }
+
     if (!drawingStateRef.current.isDrawing || drawingStateRef.current.pageNumber !== pageNumber) {
       return;
     }
@@ -1390,9 +2377,222 @@ function App() {
     annotationsRef.current = nextAnnotations;
     redrawInkPage(pageNumber);
     persistSession(nextAnnotations);
+    scheduleMiniToolbarHide();
     setAnnotationVersion((currentValue) => currentValue + 1);
     setStatusMessage(`Stroke saved on page ${pageNumber}.`);
-  }, [ensurePageAnnotations, persistSession, redrawInkPage]);
+  }, [activeTool, computeSelectionBoundsForIndexes, ensurePageAnnotations, persistSession, redrawInkPage, scheduleMiniToolbarHide]);
+
+  const handleShortcutChange = useCallback((actionName, value) => {
+    const normalizedKey = normalizeShortcutKey(value);
+
+    if (!normalizedKey && value !== '') {
+      return;
+    }
+
+    setShortcutConfig((currentConfig) => ({
+      ...currentConfig,
+      [actionName]: normalizedKey,
+    }));
+  }, []);
+
+  const resetShortcutConfig = useCallback(() => {
+    setShortcutConfig(DEFAULT_SHORTCUT_CONFIG);
+    setStatusMessage('Keyboard shortcuts reset to defaults.');
+  }, []);
+
+  const applyZoomPreset = useCallback((preset) => {
+    if (preset === 'fit-width') {
+      setViewScale(1);
+      setStatusMessage('Zoom preset: fit width.');
+      return;
+    }
+
+    if (preset === 'fit-page') {
+      setViewScale(0.82);
+      setStatusMessage('Zoom preset: fit page.');
+      return;
+    }
+
+    setViewScale(DEFAULT_VIEW_SCALE);
+    setStatusMessage('Zoom reset to 100%.');
+  }, []);
+
+  const rotateViewClockwise = useCallback(() => {
+    setRotationDegrees((currentValue) => (currentValue + 90) % 360);
+    setStatusMessage('Rotated page view 90 degrees.');
+  }, []);
+
+  const handleAddTodo = useCallback(() => {
+    const trimmedInput = todoInput.trim();
+
+    if (!trimmedInput) {
+      return;
+    }
+
+    setTodoItems((currentItems) => [{ id: `${Date.now()}`, text: trimmedInput, done: false }, ...currentItems]);
+    setTodoInput('');
+  }, [todoInput]);
+
+  const toggleTodoItem = useCallback((todoId) => {
+    setTodoItems((currentItems) => currentItems.map((item) => {
+      if (item.id !== todoId) {
+        return item;
+      }
+
+      return { ...item, done: !item.done };
+    }));
+  }, []);
+
+  const removeTodoItem = useCallback((todoId) => {
+    setTodoItems((currentItems) => currentItems.filter((item) => item.id !== todoId));
+  }, []);
+
+  const launchSampleNotebook = useCallback(() => {
+    const sampleDocumentId = `sample:${Date.now()}`;
+    loadNotebookSession({ documentId: sampleDocumentId, notebookName: 'Sample Project Notebook', fresh: true });
+    setShowOnboardingTour(false);
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(ONBOARDING_STORAGE_KEY, 'true');
+    }
+  }, [loadNotebookSession]);
+
+  const applyTemplateSelection = useCallback((templateId) => {
+    setPaperTemplate(templateId);
+    setStatusMessage(`${templateId.replace('-', ' ')} template selected.`);
+  }, []);
+
+  const resizeSelectedStrokes = useCallback((scaleFactor) => {
+    const selection = lassoSelectionRef.current;
+
+    if (!selection || selection.pageNumber !== activePageNumber || !selection.strokeIndexes.length || !selection.bounds) {
+      setStatusMessage('Select strokes with lasso before resizing.');
+      return;
+    }
+
+    const pageAnnotations = ensurePageAnnotations(activePageNumber);
+    const selectedIndexes = new Set(selection.strokeIndexes);
+    const centerPoint = {
+      x: selection.bounds.minX + selection.bounds.width / 2,
+      y: selection.bounds.minY + selection.bounds.height / 2,
+    };
+    const nextStrokes = pageAnnotations.strokes.map((stroke, strokeIndex) => {
+      if (!selectedIndexes.has(strokeIndex)) {
+        return stroke;
+      }
+
+      return scaleStrokePoints(stroke, centerPoint, scaleFactor);
+    });
+    const nextAnnotations = {
+      ...annotationsRef.current,
+      [activePageNumber]: {
+        ...pageAnnotations,
+        strokes: nextStrokes,
+      },
+    };
+
+    annotationsRef.current = nextAnnotations;
+    const nextSelection = {
+      ...selection,
+      bounds: computeSelectionBoundsForIndexes(nextStrokes, selection.strokeIndexes),
+    };
+    lassoSelectionRef.current = nextSelection;
+    setLassoSelection(nextSelection);
+    redrawInkPage(activePageNumber);
+    persistSession(nextAnnotations);
+    setAnnotationVersion((currentValue) => currentValue + 1);
+    setStatusMessage(`Resized selected strokes (${Math.round(scaleFactor * 100)}%).`);
+  }, [activePageNumber, computeSelectionBoundsForIndexes, ensurePageAnnotations, persistSession, redrawInkPage]);
+
+  const copySelectedStrokes = useCallback(() => {
+    const selection = lassoSelectionRef.current;
+
+    if (!selection || selection.pageNumber !== activePageNumber || !selection.strokeIndexes.length) {
+      setStatusMessage('Select strokes with lasso before copying.');
+      return;
+    }
+
+    const pageAnnotations = ensurePageAnnotations(activePageNumber);
+    const copiedStrokes = selection.strokeIndexes
+      .map((strokeIndex) => pageAnnotations.strokes[strokeIndex])
+      .filter(Boolean)
+      .map((stroke) => cloneStroke(stroke));
+
+    if (!copiedStrokes.length) {
+      setStatusMessage('No selected strokes available to copy.');
+      return;
+    }
+
+    lassoClipboardRef.current = copiedStrokes;
+    setStatusMessage(`Copied ${copiedStrokes.length} stroke${copiedStrokes.length > 1 ? 's' : ''}.`);
+  }, [activePageNumber, ensurePageAnnotations]);
+
+  const pasteSelectedStrokes = useCallback(() => {
+    const clipboardStrokes = lassoClipboardRef.current;
+
+    if (!Array.isArray(clipboardStrokes) || !clipboardStrokes.length) {
+      setStatusMessage('Clipboard is empty. Copy a lasso selection first.');
+      return;
+    }
+
+    const pageAnnotations = ensurePageAnnotations(activePageNumber);
+    const translatedStrokes = clipboardStrokes.map((stroke) => translateStrokePoints(stroke, 0.02, 0.02));
+    const insertionStartIndex = pageAnnotations.strokes.length;
+    const nextStrokes = [...pageAnnotations.strokes, ...translatedStrokes];
+    const nextIndexes = translatedStrokes.map((_, index) => insertionStartIndex + index);
+    const nextAnnotations = {
+      ...annotationsRef.current,
+      [activePageNumber]: {
+        ...pageAnnotations,
+        strokes: nextStrokes,
+        redoStack: [],
+      },
+    };
+
+    annotationsRef.current = nextAnnotations;
+    const nextSelection = {
+      pageNumber: activePageNumber,
+      strokeIndexes: nextIndexes,
+      bounds: computeSelectionBoundsForIndexes(nextStrokes, nextIndexes),
+    };
+
+    lassoSelectionRef.current = nextSelection;
+    setLassoSelection(nextSelection);
+    setLassoPath(null);
+    redrawInkPage(activePageNumber);
+    persistSession(nextAnnotations);
+    setAnnotationVersion((currentValue) => currentValue + 1);
+    setStatusMessage(`Pasted ${translatedStrokes.length} stroke${translatedStrokes.length > 1 ? 's' : ''}.`);
+  }, [activePageNumber, computeSelectionBoundsForIndexes, ensurePageAnnotations, persistSession, redrawInkPage]);
+
+  const deleteSelectedStrokes = useCallback(() => {
+    const selection = lassoSelectionRef.current;
+
+    if (!selection || selection.pageNumber !== activePageNumber || !selection.strokeIndexes.length) {
+      setStatusMessage('Select strokes with lasso before deleting.');
+      return;
+    }
+
+    const pageAnnotations = ensurePageAnnotations(activePageNumber);
+    const selectedIndexes = new Set(selection.strokeIndexes);
+    const nextStrokes = pageAnnotations.strokes.filter((_, strokeIndex) => !selectedIndexes.has(strokeIndex));
+    const nextAnnotations = {
+      ...annotationsRef.current,
+      [activePageNumber]: {
+        ...pageAnnotations,
+        strokes: nextStrokes,
+        redoStack: [],
+      },
+    };
+
+    annotationsRef.current = nextAnnotations;
+    lassoSelectionRef.current = null;
+    setLassoSelection(null);
+    setLassoPath(null);
+    redrawInkPage(activePageNumber);
+    persistSession(nextAnnotations);
+    setAnnotationVersion((currentValue) => currentValue + 1);
+    setStatusMessage('Deleted selected strokes.');
+  }, [activePageNumber, ensurePageAnnotations, persistSession, redrawInkPage]);
 
   const handleUndo = useCallback(() => {
     const pageAnnotations = ensurePageAnnotations(activePageNumber);
@@ -1411,6 +2611,11 @@ function App() {
     };
 
     annotationsRef.current = nextAnnotations;
+    if (lassoSelectionRef.current?.pageNumber === activePageNumber) {
+      lassoSelectionRef.current = null;
+      setLassoSelection(null);
+      setLassoPath(null);
+    }
     redrawInkPage(activePageNumber);
     persistSession(nextAnnotations);
     setAnnotationVersion((currentValue) => currentValue + 1);
@@ -1434,11 +2639,142 @@ function App() {
     };
 
     annotationsRef.current = nextAnnotations;
+    if (lassoSelectionRef.current?.pageNumber === activePageNumber) {
+      lassoSelectionRef.current = null;
+      setLassoSelection(null);
+      setLassoPath(null);
+    }
     redrawInkPage(activePageNumber);
     persistSession(nextAnnotations);
     setAnnotationVersion((currentValue) => currentValue + 1);
     setStatusMessage(`Restored a stroke on page ${activePageNumber}.`);
   }, [activePageNumber, ensurePageAnnotations, persistSession, redrawInkPage]);
+
+  useEffect(() => {
+    const handleKeyDown = (event) => {
+      if (currentView !== 'editor') {
+        return;
+      }
+
+      const target = event.target;
+      const isTypingTarget = target instanceof HTMLElement
+        && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+
+      if (isTypingTarget || event.metaKey || event.ctrlKey || event.altKey) {
+        return;
+      }
+
+      const pressedKey = normalizeShortcutKey(event.key);
+
+      if (!pressedKey) {
+        return;
+      }
+
+      if (pressedKey === shortcutConfig.pen) {
+        event.preventDefault();
+        activateTool('pen', true);
+        return;
+      }
+
+      if (pressedKey === shortcutConfig.highlighter) {
+        event.preventDefault();
+        activateTool('highlighter', true);
+        return;
+      }
+
+      if (pressedKey === shortcutConfig.eraser) {
+        event.preventDefault();
+        activateTool('eraser', true);
+        return;
+      }
+
+      if (pressedKey === shortcutConfig.undo) {
+        event.preventDefault();
+        handleUndo();
+        return;
+      }
+
+      if (pressedKey === shortcutConfig.redo) {
+        event.preventDefault();
+        handleRedo();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [activateTool, currentView, handleRedo, handleUndo, shortcutConfig]);
+
+  useEffect(() => {
+    const handleLassoShortcuts = (event) => {
+      if (currentView !== 'editor') {
+        return;
+      }
+
+      const target = event.target;
+      const isTypingTarget = target instanceof HTMLElement
+        && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+
+      if (isTypingTarget || activeTool !== 'lasso') {
+        return;
+      }
+
+      const pressedKey = event.key.toLowerCase();
+
+      if ((event.metaKey || event.ctrlKey) && pressedKey === 'c') {
+        event.preventDefault();
+        copySelectedStrokes();
+        return;
+      }
+
+      if ((event.metaKey || event.ctrlKey) && pressedKey === 'v') {
+        event.preventDefault();
+        pasteSelectedStrokes();
+        return;
+      }
+
+      if (!event.metaKey && !event.ctrlKey && !event.altKey && (event.key === 'Delete' || event.key === 'Backspace')) {
+        event.preventDefault();
+        deleteSelectedStrokes();
+      }
+    };
+
+    window.addEventListener('keydown', handleLassoShortcuts);
+
+    return () => {
+      window.removeEventListener('keydown', handleLassoShortcuts);
+    };
+  }, [activeTool, copySelectedStrokes, currentView, deleteSelectedStrokes, pasteSelectedStrokes]);
+
+  useEffect(() => {
+    return () => {
+      const recognition = speechRecognitionRef.current;
+
+      if (recognition) {
+        recognition.stop();
+      }
+
+      if (transcriptToastTimerRef.current) {
+        window.clearTimeout(transcriptToastTimerRef.current);
+      }
+
+      if (voiceVolumeFrameRef.current) {
+        window.cancelAnimationFrame(voiceVolumeFrameRef.current);
+      }
+
+      if (voiceAudioStreamRef.current) {
+        voiceAudioStreamRef.current.getTracks().forEach((track) => {
+          track.stop();
+        });
+      }
+
+      if (voiceAudioContextRef.current) {
+        voiceAudioContextRef.current.close();
+      }
+    };
+  }, []);
 
   const handleClearPage = useCallback(() => {
     const nextAnnotations = {
@@ -1447,6 +2783,11 @@ function App() {
     };
 
     annotationsRef.current = nextAnnotations;
+    if (lassoSelectionRef.current?.pageNumber === activePageNumber) {
+      lassoSelectionRef.current = null;
+      setLassoSelection(null);
+      setLassoPath(null);
+    }
     redrawInkPage(activePageNumber);
     persistSession(nextAnnotations);
     setAnnotationVersion((currentValue) => currentValue + 1);
@@ -1464,169 +2805,6 @@ function App() {
     target.scrollIntoView({ behavior: 'smooth', block: 'start' });
     setActivePageNumber(pageNumber);
   }, [updateRenderWindow]);
-
-  const processVoiceTranscript = useCallback((transcript) => {
-    const normalizedTranscript = transcript.trim();
-
-    if (!normalizedTranscript) {
-      return;
-    }
-
-    const normalizedCommandTranscript = normalizedTranscript.replace(/[^\w\u0900-\u097F\s]/g, '');
-    const compactCommandTranscript = normalizedCommandTranscript.trim().toLowerCase();
-    const feedback = [];
-    let handledCommand = false;
-
-    if (compactCommandTranscript === 'highlight') {
-      previousInkToolRef.current = 'highlighter';
-      setActiveTool('highlighter');
-      setToolPanel('highlighter');
-      feedback.push('highlighter ready');
-      handledCommand = true;
-    }
-
-    if (compactCommandTranscript === 'पुढचा' || compactCommandTranscript === 'next') {
-      const nextPageNumber = Math.min(pageCount, activePageNumber + 1);
-
-      if (nextPageNumber !== activePageNumber) {
-        scrollToPage(nextPageNumber);
-        feedback.push(`moved to page ${nextPageNumber}`);
-      } else {
-        feedback.push('already on the last page');
-      }
-
-      handledCommand = true;
-    }
-
-    const reminderText = extractReminderText(normalizedTranscript);
-
-    if (reminderText) {
-      if (saveReminder(reminderText)) {
-        feedback.push(`saved reminder: ${reminderText}`);
-      }
-
-      handledCommand = true;
-    }
-
-    if (!handledCommand) {
-      const nextVoiceNotes = appendDictatedText(dictatedNotesRef.current, normalizedTranscript);
-
-      storeDictatedNotes(nextVoiceNotes);
-      feedback.push('dictation added');
-    }
-
-    if (feedback.length) {
-      setStatusMessage(`Voice command: ${feedback.join(' • ')}.`);
-    }
-  }, [activePageNumber, pageCount, saveReminder, scrollToPage, storeDictatedNotes]);
-
-  useEffect(() => {
-    shouldKeepListeningRef.current = isListening;
-
-    if (!isListening) {
-      const recognition = speechRecognitionRef.current;
-
-      if (recognition) {
-        recognition.onresult = null;
-        recognition.onerror = null;
-        recognition.onend = null;
-
-        try {
-          recognition.stop();
-        } catch (error) {
-          // Ignore redundant stop calls.
-        }
-      }
-
-      speechRecognitionRef.current = null;
-      return undefined;
-    }
-
-    const SpeechRecognitionConstructor = getSpeechRecognitionConstructor();
-
-    if (!SpeechRecognitionConstructor) {
-      setIsListening(false);
-      setStatusMessage('Speech recognition is not supported in this browser.');
-      return undefined;
-    }
-
-    const recognition = new SpeechRecognitionConstructor();
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = 'en-IN';
-    recognition.onresult = (event) => {
-      let nextLiveTranscript = '';
-
-      for (let index = event.resultIndex; index < event.results.length; index += 1) {
-        const result = event.results[index];
-
-        if (!result.isFinal) {
-          nextLiveTranscript += `${result[0]?.transcript ?? ''} `;
-          continue;
-        }
-
-        processVoiceTranscript(result[0]?.transcript ?? '');
-      }
-
-      setLiveTranscript(nextLiveTranscript.trim());
-    };
-    recognition.onerror = (event) => {
-      if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
-        shouldKeepListeningRef.current = false;
-        setIsListening(false);
-        setStatusMessage('Microphone access was blocked, so voice commands are unavailable.');
-        return;
-      }
-
-      if (event.error === 'no-speech') {
-        return;
-      }
-
-      setStatusMessage(`Voice commands paused: ${event.error}.`);
-    };
-    recognition.onend = () => {
-      if (!shouldKeepListeningRef.current) {
-        return;
-      }
-
-      try {
-        recognition.start();
-      } catch (error) {
-        setIsListening(false);
-        setStatusMessage('Voice commands could not restart. Tap the mic to try again.');
-      }
-    };
-
-    speechRecognitionRef.current = recognition;
-
-    try {
-      recognition.start();
-      setStatusMessage('Voice dictation is live. Speak normally to type, or say Next, Highlight, or Reminder.');
-    } catch (error) {
-      speechRecognitionRef.current = null;
-      shouldKeepListeningRef.current = false;
-      setIsListening(false);
-      setStatusMessage('Voice commands could not start. Check microphone access and try again.');
-    }
-
-    return () => {
-      shouldKeepListeningRef.current = false;
-      setLiveTranscript('');
-      recognition.onresult = null;
-      recognition.onerror = null;
-      recognition.onend = null;
-
-      try {
-        recognition.stop();
-      } catch (error) {
-        // Ignore redundant stop calls.
-      }
-
-      if (speechRecognitionRef.current === recognition) {
-        speechRecognitionRef.current = null;
-      }
-    };
-  }, [isListening, processVoiceTranscript]);
 
   const handleJumpToPage = useCallback((event) => {
     event.preventDefault();
@@ -1670,6 +2848,451 @@ function App() {
     }
   }, [activePageNumber, pages, updateRenderWindow]);
 
+  const scrollViewerByVoice = useCallback((delta, directionLabel) => {
+    const viewerNode = viewerShellRef.current;
+
+    if (!viewerNode) {
+      setStatusMessage('Viewer is not ready for scrolling yet.');
+      return false;
+    }
+
+    viewerNode.scrollTop += delta;
+    setStatusMessage(`Voice: scrolled ${directionLabel}.`);
+    return true;
+  }, []);
+
+  const getCenterViewportTarget = useCallback(() => {
+    const viewerNode = viewerShellRef.current;
+
+    if (!viewerNode) {
+      return null;
+    }
+
+    const viewerRect = viewerNode.getBoundingClientRect();
+    const centerX = viewerRect.left + viewerRect.width / 2;
+    const centerY = viewerRect.top + viewerRect.height / 2;
+    const centerElement = document.elementFromPoint(centerX, centerY);
+
+    if (!centerElement) {
+      return null;
+    }
+
+    const pageStage = centerElement.closest('.page-stage');
+    const stackStage = pageStage?.querySelector('.stack-stage') ?? null;
+    const stackRect = stackStage?.getBoundingClientRect() ?? null;
+    const textElement = centerElement.closest('span, p, strong, label, h1, h2, h3, h4, li, a, button');
+    const parsedPage = Number.parseInt(pageStage?.getAttribute('data-page-number') || '', 10);
+    const pageNumber = Number.isFinite(parsedPage) ? parsedPage : activePageNumber;
+
+    let normalizedCenter = { x: 0.5, y: 0.5 };
+
+    if (stackRect) {
+      normalizedCenter = {
+        x: clampNumber((centerX - stackRect.left) / Math.max(stackRect.width, 1), 0.02, 0.98),
+        y: clampNumber((centerY - stackRect.top) / Math.max(stackRect.height, 1), 0.02, 0.98),
+      };
+    }
+
+    return {
+      pageNumber,
+      stackRect,
+      textElement,
+      textRect: textElement?.getBoundingClientRect() ?? null,
+      normalizedCenter,
+    };
+  }, [activePageNumber]);
+
+  const applyCenterFocusHighlight = useCallback(() => {
+    const centerTarget = getCenterViewportTarget();
+
+    if (!centerTarget) {
+      setStatusMessage('Voice: unable to detect center focus target.');
+      return false;
+    }
+
+    const pageNumber = centerTarget.pageNumber;
+    const pageAnnotations = ensurePageAnnotations(pageNumber);
+    const baseCenter = centerTarget.normalizedCenter;
+    let minX = clampNumber(baseCenter.x - 0.16, 0.02, 0.94);
+    let maxX = clampNumber(baseCenter.x + 0.16, 0.06, 0.98);
+    let minY = clampNumber(baseCenter.y - 0.028, 0.02, 0.94);
+    let maxY = clampNumber(baseCenter.y + 0.028, 0.06, 0.98);
+
+    if (centerTarget.textRect && centerTarget.stackRect) {
+      const { textRect, stackRect } = centerTarget;
+      minX = clampNumber((textRect.left - stackRect.left - 6) / Math.max(stackRect.width, 1), 0.02, 0.96);
+      maxX = clampNumber((textRect.right - stackRect.left + 6) / Math.max(stackRect.width, 1), 0.04, 0.98);
+      minY = clampNumber((textRect.top - stackRect.top - 6) / Math.max(stackRect.height, 1), 0.02, 0.96);
+      maxY = clampNumber((textRect.bottom - stackRect.top + 6) / Math.max(stackRect.height, 1), 0.04, 0.98);
+    }
+
+    if (maxX - minX < 0.05) {
+      maxX = clampNumber(minX + 0.11, 0.07, 0.98);
+    }
+
+    if (maxY - minY < 0.012) {
+      maxY = clampNumber(minY + 0.03, 0.04, 0.98);
+    }
+
+    const highlightStroke = cloneStroke({
+      id: `voice-highlight-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      tool: 'highlighter',
+      variant: selectedHighlighterPreset.id,
+      color: inkColor,
+      width: Math.max(highlighterSize * selectedHighlighterPreset.widthScale, TOOL_PRESETS.highlighter.width * 0.8),
+      opacity: selectedHighlighterPreset.opacity,
+      pressureEnabled: false,
+      shapeType: null,
+      createdAt: new Date().toISOString(),
+      points: [
+        { x: minX, y: minY, pressure: 1 },
+        { x: maxX, y: minY, pressure: 1 },
+        { x: maxX, y: maxY, pressure: 1 },
+        { x: minX, y: maxY, pressure: 1 },
+        { x: minX, y: minY, pressure: 1 },
+      ],
+    });
+
+    const nextAnnotations = {
+      ...annotationsRef.current,
+      [pageNumber]: {
+        ...pageAnnotations,
+        strokes: [...pageAnnotations.strokes, highlightStroke],
+        redoStack: [],
+      },
+    };
+
+    annotationsRef.current = nextAnnotations;
+    redrawInkPage(pageNumber);
+    persistSession(nextAnnotations);
+    setAnnotationVersion((currentValue) => currentValue + 1);
+    setStatusMessage('Voice: smart center highlight applied.');
+    return true;
+  }, [ensurePageAnnotations, getCenterViewportTarget, highlighterSize, inkColor, persistSession, redrawInkPage, selectedHighlighterPreset]);
+
+  const jumpToPageFromVoice = useCallback((requestedPageNumber) => {
+    if (!Number.isFinite(requestedPageNumber)) {
+      return false;
+    }
+
+    const nextPageNumber = Math.max(1, Math.min(pageCount, Math.trunc(requestedPageNumber)));
+    setPageJumpValue(String(nextPageNumber));
+    scrollToPage(nextPageNumber);
+    setStatusMessage(`Voice: jumped to page ${nextPageNumber}.`);
+    return true;
+  }, [pageCount, scrollToPage]);
+
+  const saveReminderFromTranscript = useCallback(async (rawTranscript) => {
+    const parsedReminder = parseReminderTask(rawTranscript);
+
+    if (!parsedReminder) {
+      return false;
+    }
+
+    const reminderRecord = {
+      reminderId: `reminder:${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      taskDescription: parsedReminder.taskDescription,
+      createdAt: new Date().toISOString(),
+      dueAt: parsedReminder.dueAt ? parsedReminder.dueAt.toISOString() : null,
+      sourceTranscript: rawTranscript,
+    };
+
+    try {
+      await saveReminder(reminderRecord);
+      const dueLabel = parsedReminder.dueAt ? ` for ${parsedReminder.dueAt.toLocaleString()}` : '';
+      setStatusMessage(`Voice reminder saved: ${parsedReminder.taskDescription}${dueLabel}.`);
+      return true;
+    } catch (error) {
+      setStatusMessage('Unable to save reminder right now.');
+      return false;
+    }
+  }, []);
+
+  const stopVoiceVisualizer = useCallback(() => {
+    if (voiceVolumeFrameRef.current) {
+      window.cancelAnimationFrame(voiceVolumeFrameRef.current);
+      voiceVolumeFrameRef.current = null;
+    }
+
+    if (voiceAudioStreamRef.current) {
+      voiceAudioStreamRef.current.getTracks().forEach((track) => {
+        track.stop();
+      });
+      voiceAudioStreamRef.current = null;
+    }
+
+    if (voiceAudioContextRef.current) {
+      voiceAudioContextRef.current.close();
+      voiceAudioContextRef.current = null;
+    }
+
+    voiceAnalyserRef.current = null;
+    setVoiceLevel(0);
+  }, []);
+
+  const startVoiceVisualizer = useCallback(async () => {
+    if (typeof window === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+      return;
+    }
+
+    stopVoiceVisualizer();
+
+    try {
+      const mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.75;
+      const source = audioContext.createMediaStreamSource(mediaStream);
+      source.connect(analyser);
+
+      voiceAudioStreamRef.current = mediaStream;
+      voiceAudioContextRef.current = audioContext;
+      voiceAnalyserRef.current = analyser;
+
+      const frequencyBuffer = new Uint8Array(analyser.frequencyBinCount);
+
+      const tick = () => {
+        const activeAnalyser = voiceAnalyserRef.current;
+
+        if (!activeAnalyser) {
+          return;
+        }
+
+        activeAnalyser.getByteFrequencyData(frequencyBuffer);
+        const total = frequencyBuffer.reduce((sum, value) => sum + value, 0);
+        const normalizedLevel = clampNumber(total / (frequencyBuffer.length * 180), 0, 1);
+        setVoiceLevel(normalizedLevel);
+        voiceVolumeFrameRef.current = window.requestAnimationFrame(tick);
+      };
+
+      voiceVolumeFrameRef.current = window.requestAnimationFrame(tick);
+    } catch (error) {
+      setStatusMessage('Microphone permission is required for waveform feedback.');
+    }
+  }, [stopVoiceVisualizer]);
+
+  const dispatchVoiceCommand = useCallback((rawTranscript) => {
+    const transcript = String(rawTranscript || '').trim().toLowerCase();
+
+    if (!transcript) {
+      return false;
+    }
+
+    setLastVoiceTranscript(transcript);
+
+    if (transcriptIncludesAnyKeyword(transcript, activeVoiceKeywordMap.scrollDown)) {
+      return scrollViewerByVoice(VOICE_SCROLL_STEP_PX, 'down');
+    }
+
+    if (transcriptIncludesAnyKeyword(transcript, activeVoiceKeywordMap.scrollUp)) {
+      return scrollViewerByVoice(-VOICE_SCROLL_STEP_PX, 'up');
+    }
+
+    if (transcriptIncludesAnyKeyword(transcript, activeVoiceKeywordMap.nextPage)) {
+      return jumpToPageFromVoice(activePageNumber + 1);
+    }
+
+    if (transcriptIncludesAnyKeyword(transcript, activeVoiceKeywordMap.previousPage)) {
+      return jumpToPageFromVoice(activePageNumber - 1);
+    }
+
+    const goToPageMatch = transcript.match(/\b(?:go to|jump to|open)?\s*page\s*(\d{1,4})\b/i)
+      ?? transcript.match(/पान\s*(\d{1,4})/i)
+      ?? transcript.match(/\b(\d{1,4})\b/);
+    if (goToPageMatch && transcriptIncludesAnyKeyword(transcript, activeVoiceKeywordMap.jumpToPage)) {
+      const parsedPageNumber = Number.parseInt(goToPageMatch[1], 10);
+      if (Number.isFinite(parsedPageNumber)) {
+        return jumpToPageFromVoice(parsedPageNumber);
+      }
+    }
+
+    if (transcriptIncludesAnyKeyword(transcript, activeVoiceKeywordMap.remind)) {
+      saveReminderFromTranscript(rawTranscript);
+      return true;
+    }
+
+    const matchedColor = Object.entries(VOICE_COLOR_MAP).find(([colorName]) => {
+      return new RegExp(`\\b${colorName}\\b`, 'i').test(transcript);
+    });
+
+    if (transcriptIncludesAnyKeyword(transcript, activeVoiceKeywordMap.highlighter)) {
+      activateTool('highlighter', true);
+
+      if (matchedColor) {
+        setInkColor(matchedColor[1]);
+        setStatusMessage(`Voice: highlighter set to ${matchedColor[0]}.`);
+      } else {
+        setStatusMessage('Voice: highlighter selected.');
+      }
+
+      if (transcript.includes('highlight') || transcript.includes('हायलाइट')) {
+        applyCenterFocusHighlight();
+      }
+
+      return true;
+    }
+
+    if (transcriptIncludesAnyKeyword(transcript, activeVoiceKeywordMap.pen)) {
+      activateTool('pen', true);
+
+      if (matchedColor) {
+        setInkColor(matchedColor[1]);
+        setStatusMessage(`Voice: pen set to ${matchedColor[0]}.`);
+      } else {
+        setStatusMessage('Voice: pen selected.');
+      }
+
+      return true;
+    }
+
+    if (transcriptIncludesAnyKeyword(transcript, activeVoiceKeywordMap.eraser)) {
+      activateTool('eraser', true);
+      setStatusMessage('Voice: eraser selected.');
+      return true;
+    }
+
+    if (transcriptIncludesAnyKeyword(transcript, activeVoiceKeywordMap.lasso)) {
+      activateTool('lasso', true);
+      setStatusMessage('Voice: lasso selected.');
+      return true;
+    }
+
+    if (transcriptIncludesAnyKeyword(transcript, activeVoiceKeywordMap.shape)) {
+      activateTool('shape', true);
+      setStatusMessage('Voice: shape tool selected.');
+      return true;
+    }
+
+    if (transcript.includes('undo')) {
+      handleUndo();
+      return true;
+    }
+
+    if (transcript.includes('redo')) {
+      handleRedo();
+      return true;
+    }
+
+    setStatusMessage(`Voice command not recognized: "${transcript}".`);
+    return false;
+  }, [activateTool, activePageNumber, activeVoiceKeywordMap, applyCenterFocusHighlight, handleRedo, handleUndo, jumpToPageFromVoice, saveReminderFromTranscript, scrollViewerByVoice]);
+
+  const stopVoiceRecognition = useCallback(() => {
+    const recognition = speechRecognitionRef.current;
+
+    if (recognition) {
+      recognition.stop();
+      speechRecognitionRef.current = null;
+    }
+
+    stopVoiceVisualizer();
+    setInterimVoiceTranscript('');
+    setIsVoiceListening(false);
+  }, [stopVoiceVisualizer]);
+
+  const startVoiceRecognition = useCallback((language = voiceLanguage) => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const RecognitionApi = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    if (!RecognitionApi) {
+      setStatusMessage('Speech recognition is unavailable in this browser.');
+      return;
+    }
+
+    if (speechRecognitionRef.current) {
+      speechRecognitionRef.current.stop();
+      speechRecognitionRef.current = null;
+    }
+
+    const recognition = new RecognitionApi();
+    recognition.lang = language;
+    recognition.continuous = true;
+    recognition.interimResults = true;
+
+    recognition.onresult = (event) => {
+      const nextTranscripts = [];
+      const interimParts = [];
+
+      for (let index = event.resultIndex; index < event.results.length; index += 1) {
+        const result = event.results[index];
+
+        if (result.isFinal && result[0]?.transcript) {
+          nextTranscripts.push(result[0].transcript);
+          continue;
+        }
+
+        if (result[0]?.transcript) {
+          interimParts.push(result[0].transcript);
+        }
+      }
+
+      const interimTranscript = interimParts.join(' ').trim();
+      setInterimVoiceTranscript(interimTranscript);
+
+      if (interimTranscript) {
+        setVoiceTranscriptToast(interimTranscript);
+
+        if (transcriptToastTimerRef.current) {
+          window.clearTimeout(transcriptToastTimerRef.current);
+        }
+
+        transcriptToastTimerRef.current = window.setTimeout(() => {
+          setVoiceTranscriptToast('');
+          transcriptToastTimerRef.current = null;
+        }, 1500);
+      }
+
+      nextTranscripts.forEach((transcript) => {
+        dispatchVoiceCommand(transcript);
+      });
+    };
+
+    recognition.onerror = (event) => {
+      setStatusMessage(`Voice error: ${event.error || 'unknown speech error'}.`);
+      stopVoiceVisualizer();
+      setIsVoiceListening(false);
+    };
+
+    recognition.onend = () => {
+      speechRecognitionRef.current = null;
+      stopVoiceVisualizer();
+      setInterimVoiceTranscript('');
+      setIsVoiceListening(false);
+    };
+
+    recognition.start();
+    startVoiceVisualizer();
+    speechRecognitionRef.current = recognition;
+    setIsVoiceListening(true);
+    setStatusMessage(`Voice commands are listening (${language}).`);
+  }, [dispatchVoiceCommand, startVoiceVisualizer, stopVoiceVisualizer, voiceLanguage]);
+
+  const toggleVoiceRecognition = useCallback(() => {
+    if (isVoiceListening) {
+      stopVoiceRecognition();
+      setStatusMessage('Voice commands stopped.');
+      return;
+    }
+
+    startVoiceRecognition();
+  }, [isVoiceListening, startVoiceRecognition, stopVoiceRecognition]);
+
+  const handleVoiceLanguageChange = useCallback((event) => {
+    const nextLanguage = event.target.value;
+    setVoiceLanguage(nextLanguage);
+
+    if (isVoiceListening) {
+      stopVoiceRecognition();
+      window.setTimeout(() => {
+        startVoiceRecognition(nextLanguage);
+      }, 160);
+    }
+  }, [isVoiceListening, startVoiceRecognition, stopVoiceRecognition]);
+
   const handleAddPage = useCallback(() => {
     const nextPages = [...pages, {
       pageNumber: pages.length + 1,
@@ -1690,6 +3313,15 @@ function App() {
     const file = event.target.files?.[0];
 
     if (!file) {
+      return;
+    }
+
+    const fileName = file.name || '';
+    const isPdf = file.type === 'application/pdf' || fileName.toLowerCase().endsWith('.pdf');
+
+    if (!isPdf) {
+      setStatusMessage('Only PDF files are supported for import.');
+      event.target.value = '';
       return;
     }
 
@@ -1765,6 +3397,82 @@ function App() {
       Number.parseInt(stroke.color.slice(3, 5), 16) / 255,
       Number.parseInt(stroke.color.slice(5, 7), 16) / 255,
     );
+
+    if (stroke.tool === 'shape') {
+      const startPoint = stroke.points[0];
+      const endPoint = stroke.points[stroke.points.length - 1] ?? startPoint;
+      const startX = startPoint.x * width;
+      const startY = height - startPoint.y * height;
+      const endX = endPoint.x * width;
+      const endY = height - endPoint.y * height;
+
+      if (stroke.shapeType === 'rectangle') {
+        page.drawRectangle({
+          x: Math.min(startX, endX),
+          y: Math.min(startY, endY),
+          width: Math.abs(endX - startX),
+          height: Math.abs(endY - startY),
+          borderWidth: stroke.width,
+          borderColor: rgbColor,
+          opacity: stroke.opacity,
+        });
+        return;
+      }
+
+      if (stroke.shapeType === 'circle') {
+        const centerX = (startX + endX) / 2;
+        const centerY = (startY + endY) / 2;
+        page.drawEllipse({
+          x: centerX,
+          y: centerY,
+          xScale: Math.max(Math.abs(endX - startX) / 2, 0.5),
+          yScale: Math.max(Math.abs(endY - startY) / 2, 0.5),
+          borderWidth: stroke.width,
+          borderColor: rgbColor,
+          opacity: stroke.opacity,
+        });
+        return;
+      }
+
+      page.drawLine({
+        start: { x: startX, y: startY },
+        end: { x: endX, y: endY },
+        thickness: stroke.width,
+        color: rgbColor,
+        opacity: stroke.opacity,
+      });
+
+      if (stroke.shapeType === 'arrow') {
+        const deltaX = endX - startX;
+        const deltaY = endY - startY;
+        const angle = Math.atan2(deltaY, deltaX);
+        const arrowLength = Math.max(10, stroke.width * 3.2);
+        const spread = Math.PI / 7;
+
+        page.drawLine({
+          start: { x: endX, y: endY },
+          end: {
+            x: endX - arrowLength * Math.cos(angle - spread),
+            y: endY - arrowLength * Math.sin(angle - spread),
+          },
+          thickness: stroke.width,
+          color: rgbColor,
+          opacity: stroke.opacity,
+        });
+        page.drawLine({
+          start: { x: endX, y: endY },
+          end: {
+            x: endX - arrowLength * Math.cos(angle + spread),
+            y: endY - arrowLength * Math.sin(angle + spread),
+          },
+          thickness: stroke.width,
+          color: rgbColor,
+          opacity: stroke.opacity,
+        });
+      }
+
+      return;
+    }
 
     if (stroke.points.length === 1) {
       const point = stroke.points[0];
@@ -1856,6 +3564,10 @@ function App() {
   }, [documentName, drawExportStroke, drawNotebookRuling, hasPdf, pages, sourceType]);
 
   const activePageAnnotations = annotationsRef.current[activePageNumber] ?? createEmptyPageAnnotations();
+  const pageStrokeCountMap = pages.reduce((nextCounts, page) => {
+    nextCounts[page.pageNumber] = annotationsRef.current[page.pageNumber]?.strokes?.length ?? 0;
+    return nextCounts;
+  }, {});
   const totalStrokeCount = Object.values(annotationsRef.current).reduce((strokeCount, pageAnnotations) => {
     return strokeCount + (pageAnnotations?.strokes?.length ?? 0);
   }, 0);
@@ -1863,7 +3575,7 @@ function App() {
   void _annotationVersion;
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell theme-${themePreset} notes-layout-${notesLayout} ${highContrastMode ? 'high-contrast' : ''} ${largeHitTargets ? 'large-targets' : ''} ${focusModeEnabled ? 'focus-mode' : ''}`} style={{ '--ui-scale': uiScale }}>
       <header className="app-header">
         <div>
           <p className="eyebrow">Tablet-style notes</p>
@@ -1873,28 +3585,53 @@ function App() {
           </p>
         </div>
 
-        <button
-          type="button"
-          className={`listen-chip ${isListening ? 'active' : ''}`}
-          onClick={() => setIsListening((currentValue) => !currentValue)}
-        >
-          {isListening ? <Mic size={18} /> : <MicOff size={18} />}
-          <span>{isListening ? 'Listening...' : 'Mic idle'}</span>
-        </button>
+        <div className="global-controls" aria-label="Reading and accessibility controls">
+          <label className="global-control-row">
+            <span>Paper</span>
+            <select value={paperTemplate} onChange={(event) => setPaperTemplate(event.target.value)}>
+              <option value="ruled">Ruled</option>
+              <option value="grid">Grid</option>
+              <option value="dot">Dot</option>
+              <option value="cornell">Cornell</option>
+              <option value="planner">Planner</option>
+            </select>
+          </label>
+          <label className="global-control-row">
+            <span>Notes Layout</span>
+            <select value={notesLayout} onChange={(event) => setNotesLayout(event.target.value)}>
+              <option value="tablet">Tablet</option>
+              <option value="classic">Classic</option>
+            </select>
+          </label>
+          <div className="global-control-inline">
+            <button type="button" className="overlay-button compact" onClick={() => applyZoomPreset('fit-width')}>Fit Width</button>
+            <button type="button" className="overlay-button compact" onClick={() => applyZoomPreset('fit-page')}>Fit Page</button>
+            <button type="button" className="overlay-button compact" onClick={rotateViewClockwise}>Rotate</button>
+            <button type="button" className={`overlay-button compact ${splitViewEnabled ? 'selected' : ''}`} onClick={() => setSplitViewEnabled((currentValue) => !currentValue)}>Split</button>
+          </div>
+          <label className="global-control-row">
+            <span>UI Scale</span>
+            <input type="range" min="0.85" max="1.25" step="0.05" value={uiScale} onChange={(event) => setUiScale(Number.parseFloat(event.target.value))} />
+          </label>
+          <div className="global-control-inline">
+            <button type="button" className={`overlay-button compact ${largeHitTargets ? 'selected' : ''}`} onClick={() => setLargeHitTargets((currentValue) => !currentValue)}>Large Targets</button>
+            <button type="button" className={`overlay-button compact ${highContrastMode ? 'selected' : ''}`} onClick={() => setHighContrastMode((currentValue) => !currentValue)}>High Contrast</button>
+          </div>
+        </div>
       </header>
 
       <main className="workspace-card">
         {currentView === 'home' ? (
           <div className="library-shell">
             <aside className="library-sidebar">
-              <h2 className="library-brand">VoxNotes</h2>
+              <h2 className="library-brand">Noteshelf</h2>
 
               <div className="library-tile-grid">
                 {LIBRARY_TILES.map((tile) => {
                   const TileIcon = tile.icon;
 
                   return (
-                    <button key={tile.key} type="button" className={`library-tile ${tile.accentClass}`}>
+                    <button key={tile.key} type="button" className={`library-tile ${tile.accentClass} ${tile.active ? 'active' : ''}`}>
                       <span className="library-tile-icon"><TileIcon size={16} /></span>
                       <span>{tile.title}</span>
                       {tile.badge ? <strong>{tile.badge}</strong> : null}
@@ -1917,18 +3654,46 @@ function App() {
                 </button>
               </div>
 
+              <div className="library-folder-card">
+                <div className="library-section-head">
+                  <h3>Content</h3>
+                </div>
+                <button type="button" className="folder-row">
+                  <Image size={16} />
+                  <span>Photos</span>
+                </button>
+                <button type="button" className="folder-row">
+                  <Mic size={16} />
+                  <span>Recordings</span>
+                </button>
+                <button type="button" className="folder-row">
+                  <Bookmark size={16} />
+                  <span>Bookmarks</span>
+                </button>
+              </div>
+
               <div className="library-upgrade-card">
-                <span className="upgrade-badge">Workspace</span>
-                <strong>Open the right note fast</strong>
-                <p>Start from a quick note, create a fresh notebook, or reopen a saved session.</p>
+                <span className="upgrade-badge"><Crown size={14} /> Upgrade to Premium</span>
+                <strong>0 notes left</strong>
+                <button type="button" className="upgrade-button">Upgrade Now</button>
               </div>
             </aside>
 
             <section className="library-main">
               <div className="library-main-head">
                 <div>
-                  <p className="eyebrow library-eyebrow">Library</p>
                   <h2>All Notes</h2>
+                </div>
+                <div className="library-main-actions" aria-label="Library quick controls">
+                  <button type="button" className="main-action-icon" onClick={handleCreateFreshNotebook} aria-label="Create note">
+                    <Plus size={18} />
+                  </button>
+                  <button type="button" className="main-action-icon" aria-label="Search notes">
+                    <Search size={18} />
+                  </button>
+                  <button type="button" className="main-action-icon" aria-label="More options">
+                    <EllipsisVertical size={18} />
+                  </button>
                 </div>
               </div>
 
@@ -1939,7 +3704,7 @@ function App() {
                 </button>
                 <button type="button" className="library-action-card" onClick={handleCreateFreshNotebook}>
                   <span className="library-action-icon notebook"><NotebookPen size={18} /></span>
-                  <strong>New Notebook</strong>
+                  <strong>Notebook</strong>
                 </button>
                 <button type="button" className="library-action-card" onClick={() => fileInputRef.current?.click()}>
                   <span className="library-action-icon import"><Download size={18} /></span>
@@ -1947,27 +3712,21 @@ function App() {
                 </button>
               </div>
 
-              <div className="library-section-head">
-                <h3>Recent</h3>
-                <span>{isLibraryLoading ? 'Loading...' : `${libraryItems.length} saved`}</span>
-              </div>
-
               <div className="library-note-grid">
-                {libraryItems.length ? libraryItems.map((item) => (
+                {filteredLibraryItems.length ? filteredLibraryItems.map((item) => (
                   <button key={item.documentId} type="button" className="note-card" onClick={() => handleOpenStoredItem(item)}>
                     <div className={`note-card-cover ${item.accentClass} ${item.sourceType === 'pdf' ? 'pdf' : 'notebook'}`}>
                       {item.sourceType === 'pdf' ? <FileText size={22} /> : <NotebookPen size={22} />}
                     </div>
                     <strong>{item.documentName}</strong>
-                    <span>{item.sourceType === 'pdf' ? 'Imported PDF' : 'Notebook'}</span>
-                    <span>{item.pageCount} pages</span>
-                    <span>{item.updatedAt ? new Date(item.updatedAt).toLocaleString([], { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : 'Never saved'}</span>
+                    <span>{item.updatedAt ? new Date(item.updatedAt).toLocaleString([], { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : 'Just now'}</span>
+                    <span>Unfiled</span>
                   </button>
                 )) : (
                   <div className="library-empty-state">
                     <NotebookPen size={28} />
-                    <strong>No saved notes yet</strong>
-                    <p>Start with a quick note, create a notebook, or import a PDF to build your library.</p>
+                    <strong>No notes matched your filters</strong>
+                    <p>Try another smart view or clear filters to discover your note library.</p>
                   </div>
                 )}
               </div>
@@ -2003,11 +3762,24 @@ function App() {
                           <RailGlyph kind="eraser" />
                         </span>
                       </button>
+                      <button type="button" className={`tool-rail-button ${activeTool === 'shape' ? 'selected' : ''}`} onClick={() => handleToolSelect('shape')} aria-label="Shapes">
+                        <span className="tool-rail-icon simple">
+                          <RailGlyph kind="shape" />
+                        </span>
+                      </button>
+                      <button type="button" className={`tool-rail-button ${activeTool === 'lasso' ? 'selected' : ''}`} onClick={() => handleToolSelect('lasso')} aria-label="Lasso select">
+                        <span className="tool-rail-icon simple">
+                          <RailGlyph kind="lasso" />
+                        </span>
+                      </button>
                       <button type="button" className="tool-rail-button action" onClick={handleUndo} disabled={!activePageAnnotations.strokes.length} aria-label="Undo">
                         <Undo2 size={13} />
                       </button>
                       <button type="button" className="tool-rail-button action" onClick={handleRedo} disabled={!activePageAnnotations.redoStack.length} aria-label="Redo">
                         <Redo2 size={13} />
+                      </button>
+                      <button type="button" className={`tool-rail-button action ${toolPanel === 'shortcuts' ? 'selected' : ''}`} onClick={() => setToolPanel((currentValue) => currentValue === 'shortcuts' ? null : 'shortcuts')} aria-label="Keyboard shortcuts">
+                        <Keyboard size={13} />
                       </button>
 
                       <div className="tool-rail-colors" aria-label="Quick colors">
@@ -2215,80 +3987,301 @@ function App() {
                             <button type="button" className="text-action-button" onClick={handleClearPage}>Clear Page</button>
                           </>
                         ) : null}
+
+                        {toolPanel === 'shape' ? (
+                          <>
+                            <div className="tool-popover-head">
+                              <strong>Shape tools</strong>
+                              <span className="tool-hint">Draw straight guides, callouts, and geometric shapes.</span>
+                            </div>
+
+                            <div className="shape-preset-grid">
+                              {SHAPE_VARIANTS.map((shapePreset) => (
+                                <button
+                                  key={shapePreset.id}
+                                  type="button"
+                                  className={`shape-preset-chip ${shapeType === shapePreset.id ? 'selected' : ''}`}
+                                  onClick={() => {
+                                    setShapeType(shapePreset.id);
+                                    setStatusMessage(`${shapePreset.label} selected.`);
+                                  }}
+                                >
+                                  {shapePreset.label}
+                                </button>
+                              ))}
+                            </div>
+
+                            <div className="tool-slider-row">
+                              <button type="button" className="mini-icon-button" onClick={() => setShapeSize((currentValue) => Math.max(1, currentValue - 1))}>-</button>
+                              <div className="tool-slider-pill">{shapeSize}</div>
+                              <input type="range" min="1" max="16" value={shapeSize} onChange={(event) => setShapeSize(Number.parseInt(event.target.value, 10))} />
+                              <button type="button" className="mini-icon-button" onClick={() => setShapeSize((currentValue) => Math.min(16, currentValue + 1))}>+</button>
+                            </div>
+
+                            <div className="color-group tool-popover-colors" aria-label="Shape colors">
+                              {COLOR_SWATCHS.map((color) => (
+                                <button
+                                  key={color}
+                                  type="button"
+                                  className={`color-chip ${inkColor === color ? 'selected' : ''}`}
+                                  style={{ backgroundColor: color }}
+                                  onClick={() => setInkColor(color)}
+                                  aria-label={`Color ${color}`}
+                                />
+                              ))}
+                            </div>
+
+                            <label className="custom-color-row">
+                              <span>Custom color</span>
+                              <input type="color" value={inkColor} onChange={(event) => setInkColor(event.target.value)} aria-label="Custom shape color" />
+                              <strong>{inkColor.toUpperCase()}</strong>
+                            </label>
+                          </>
+                        ) : null}
+
+                        {toolPanel === 'lasso' ? (
+                          <>
+                            <div className="tool-popover-head">
+                              <strong>Lasso select</strong>
+                              <span className="tool-hint">Loop strokes to select, drag the selection box to move, then resize.</span>
+                            </div>
+
+                            <div className="lasso-actions-grid">
+                              <button
+                                type="button"
+                                className="shape-preset-chip"
+                                onClick={() => {
+                                  clearLassoSelection();
+                                  redrawInkPage(activePageNumber);
+                                  setStatusMessage('Cleared lasso selection.');
+                                }}
+                              >
+                                Clear Selection
+                              </button>
+                              <button type="button" className="shape-preset-chip" onClick={copySelectedStrokes}>
+                                Copy Selected
+                              </button>
+                              <button type="button" className="shape-preset-chip" onClick={pasteSelectedStrokes}>
+                                Paste Selected
+                              </button>
+                              <button type="button" className="shape-preset-chip" onClick={deleteSelectedStrokes}>
+                                Delete Selected
+                              </button>
+                              <button type="button" className="shape-preset-chip" onClick={() => resizeSelectedStrokes(0.9)}>
+                                Resize 90%
+                              </button>
+                              <button type="button" className="shape-preset-chip" onClick={() => resizeSelectedStrokes(1.1)}>
+                                Resize 110%
+                              </button>
+                              <button type="button" className="shape-preset-chip" onClick={() => resizeSelectedStrokes(1.25)}>
+                                Resize 125%
+                              </button>
+                            </div>
+                          </>
+                        ) : null}
+
+                        {toolPanel === 'shortcuts' ? (
+                          <>
+                            <div className="tool-popover-head">
+                              <strong>Keyboard shortcuts</strong>
+                              <span className="tool-hint">Set one-letter keys for faster tool switching.</span>
+                            </div>
+
+                            <div className="shortcut-grid" role="group" aria-label="Keyboard shortcut settings">
+                              <label className="shortcut-row">
+                                <span>Pen</span>
+                                <input type="text" value={shortcutConfig.pen.toUpperCase()} onChange={(event) => handleShortcutChange('pen', event.target.value)} maxLength={1} />
+                              </label>
+                              <label className="shortcut-row">
+                                <span>Highlighter</span>
+                                <input type="text" value={shortcutConfig.highlighter.toUpperCase()} onChange={(event) => handleShortcutChange('highlighter', event.target.value)} maxLength={1} />
+                              </label>
+                              <label className="shortcut-row">
+                                <span>Eraser</span>
+                                <input type="text" value={shortcutConfig.eraser.toUpperCase()} onChange={(event) => handleShortcutChange('eraser', event.target.value)} maxLength={1} />
+                              </label>
+                              <label className="shortcut-row">
+                                <span>Undo</span>
+                                <input type="text" value={shortcutConfig.undo.toUpperCase()} onChange={(event) => handleShortcutChange('undo', event.target.value)} maxLength={1} />
+                              </label>
+                              <label className="shortcut-row">
+                                <span>Redo</span>
+                                <input type="text" value={shortcutConfig.redo.toUpperCase()} onChange={(event) => handleShortcutChange('redo', event.target.value)} maxLength={1} />
+                              </label>
+                            </div>
+
+                            <div className="shortcut-actions-row">
+                              <button type="button" className="text-action-button" onClick={resetShortcutConfig}>Reset defaults</button>
+                              <button type="button" className="text-action-button" onClick={swapRecentInkTools}>Swap last tools</button>
+                            </div>
+                          </>
+                        ) : null}
                       </div>
                     ) : null}
                   </div>
 
+                  <button type="button" className="section-fab" onClick={() => setShowNotebookSettings(true)}>
+                    <Settings2 size={15} />
+                    <span>Section</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className={`voice-pill-floating ${isVoiceListening ? 'listening' : ''}`}
+                    onClick={toggleVoiceRecognition}
+                    aria-pressed={isVoiceListening}
+                  >
+                    <Mic size={14} />
+                    <span>{isVoiceListening ? 'Listening' : 'Voice'}</span>
+                  </button>
+
                   {!isToolbarCollapsed ? (
                     <div className="overlay-stack">
-                      <div className="overlay-toolbar">
-                        <div className="mode-group">
-                          <button type="button" className="overlay-button" onClick={handleOpenHome}>
-                            <Home size={16} />
-                            <span>Library</span>
-                          </button>
-                          <button type="button" className={`overlay-button ${sourceType === 'notebook' ? 'selected' : ''}`} onClick={() => loadNotebookSession()}>
-                            <span>Quick Note</span>
-                          </button>
-                          <button type="button" className="overlay-button primary" onClick={() => fileInputRef.current?.click()}>
-                            <FileText size={16} />
-                            <span>Upload PDF</span>
-                          </button>
-                          <button type="button" className="overlay-button" onClick={handleAddPage} disabled={sourceType !== 'notebook'}>
-                            <Plus size={16} />
-                            <span>Add page</span>
-                          </button>
-                        </div>
-
-                        <div className="page-controls">
-                          <button type="button" className="overlay-button" onClick={() => scrollToPage(Math.max(1, activePageNumber - 1))} disabled={activePageNumber === 1}>
-                            <ChevronLeft size={16} />
-                            <span>Prev</span>
-                          </button>
-                          <div className="page-pill">
-                            <span>Page</span>
-                            <strong>{`${activePageNumber} / ${pageCount}`}</strong>
+                      {notesLayout === 'tablet' ? (
+                        <div className="notes-topbar" aria-label="Tablet notes top bar">
+                          <div className="notes-topbar-left">
+                            <button type="button" className="overlay-button compact" onClick={handleOpenHome}>
+                              <ChevronLeft size={16} />
+                            </button>
+                            <strong className="notes-topbar-title">{documentName || 'Title'}</strong>
                           </div>
-                          <button type="button" className="overlay-button" onClick={() => scrollToPage(Math.min(pageCount, activePageNumber + 1))} disabled={activePageNumber === pageCount}>
-                            <span>Next</span>
-                            <ChevronRight size={16} />
+                          <div className="notes-topbar-right">
+                            <button type="button" className="overlay-button compact" onClick={() => setShowNotebookSettings(true)}>
+                              <Settings2 size={15} />
+                              <span>Section</span>
+                            </button>
+                            <button type="button" className="overlay-button compact" onClick={handleAddPage} disabled={sourceType !== 'notebook'}>
+                              <Plus size={16} />
+                            </button>
+                            <button type="button" className="overlay-button compact" onClick={handleExportPdf} disabled={isExporting}>
+                              <Download size={15} />
+                            </button>
+                            <button type="button" className={`overlay-button compact ${isVoiceListening ? 'selected' : ''}`} onClick={toggleVoiceRecognition} aria-pressed={isVoiceListening}>
+                              <Mic size={15} />
+                            </button>
+                            <button type="button" className="overlay-button compact" onClick={handleClearPage}>
+                              <Eraser size={15} />
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="overlay-toolbar">
+                          <div className="mode-group">
+                            <button type="button" className="overlay-button" onClick={handleOpenHome}>
+                              <Home size={16} />
+                              <span>Library</span>
+                            </button>
+                            <button type="button" className="overlay-button" onClick={() => setShowNotebookSettings(true)}>
+                              <Settings2 size={16} />
+                              <span>Section</span>
+                            </button>
+                            <button type="button" className={`overlay-button ${sourceType === 'notebook' ? 'selected' : ''}`} onClick={() => loadNotebookSession()}>
+                              <span>Quick Note</span>
+                            </button>
+                            <button type="button" className="overlay-button primary" onClick={() => fileInputRef.current?.click()}>
+                              <FileText size={16} />
+                              <span>Upload PDF</span>
+                            </button>
+                            <button type="button" className="overlay-button" onClick={handleAddPage} disabled={sourceType !== 'notebook'}>
+                              <Plus size={16} />
+                              <span>Add page</span>
+                            </button>
+                          </div>
+
+                          <div className="page-controls">
+                            <button type="button" className="overlay-button" onClick={() => scrollToPage(Math.max(1, activePageNumber - 1))} disabled={activePageNumber === 1}>
+                              <ChevronLeft size={16} />
+                              <span>Prev</span>
+                            </button>
+                            <div className="page-pill">
+                              <span>Page</span>
+                              <strong>{`${activePageNumber} / ${pageCount}`}</strong>
+                            </div>
+                            <button type="button" className="overlay-button" onClick={() => scrollToPage(Math.min(pageCount, activePageNumber + 1))} disabled={activePageNumber === pageCount}>
+                              <span>Next</span>
+                              <ChevronRight size={16} />
+                            </button>
+                          </div>
+
+                          <form className="page-jump-form" onSubmit={handleJumpToPage}>
+                            <label className="page-jump-label" htmlFor="page-jump-input">Jump</label>
+                            <input
+                              id="page-jump-input"
+                              className="page-jump-input"
+                              type="number"
+                              min="1"
+                              max={pageCount}
+                              value={pageJumpValue}
+                              onChange={(event) => setPageJumpValue(event.target.value)}
+                            />
+                            <button type="submit" className="overlay-button compact">
+                              <Search size={14} />
+                              <span>Go</span>
+                            </button>
+                          </form>
+
+                          <button type="button" className="overlay-button compact" onClick={handleClearPage}>
+                            <Eraser size={15} />
+                            <span>Clear</span>
+                          </button>
+                          <button type="button" className="overlay-button compact" onClick={handleExportPdf} disabled={isExporting}>
+                            <Download size={15} />
+                            <span>{isExporting ? 'Exporting...' : 'Export'}</span>
+                          </button>
+                          <button type="button" className={`overlay-button compact ${isVoiceListening ? 'selected' : ''}`} onClick={toggleVoiceRecognition} aria-pressed={isVoiceListening}>
+                            <Mic size={15} />
+                            <span>{isVoiceListening ? 'Listening' : 'Voice'}</span>
+                          </button>
+
+                          <div className="save-pill compact-pill">
+                            <Save size={14} />
+                            <span>{lastSavedAt ? `Saved ${lastSavedAt}` : 'Auto-save ready'}</span>
+                          </div>
+
+                          <div className="status-pill compact-pill">
+                            <span className="status-dot" />
+                            <span>{statusMessage}</span>
+                          </div>
+                        </div>
+                      )}
+
+                      <div className={`voice-control-panel ${isVoiceListening ? 'listening' : ''}`} aria-live="polite">
+                        <div className="voice-control-top">
+                          <div className="voice-control-status">
+                            <span className={`voice-status-dot ${isVoiceListening ? 'active' : ''}`} />
+                            <strong>{isVoiceListening ? 'Listening now' : 'Voice paused'}</strong>
+                          </div>
+                          <button type="button" className={`overlay-button compact ${isVoiceListening ? 'selected' : ''}`} onClick={toggleVoiceRecognition} aria-pressed={isVoiceListening}>
+                            <Mic size={15} />
+                            <span>{isVoiceListening ? 'Stop' : 'Start'}</span>
                           </button>
                         </div>
 
-                        <form className="page-jump-form" onSubmit={handleJumpToPage}>
-                          <label className="page-jump-label" htmlFor="page-jump-input">Jump</label>
-                          <input
-                            id="page-jump-input"
-                            className="page-jump-input"
-                            type="number"
-                            min="1"
-                            max={pageCount}
-                            value={pageJumpValue}
-                            onChange={(event) => setPageJumpValue(event.target.value)}
-                          />
-                          <button type="submit" className="overlay-button compact">
-                            <Search size={14} />
-                            <span>Go</span>
-                          </button>
-                        </form>
-
-                        <button type="button" className="overlay-button compact" onClick={handleClearPage}>
-                          <Eraser size={15} />
-                          <span>Clear</span>
-                        </button>
-                        <button type="button" className="overlay-button compact" onClick={handleExportPdf} disabled={isExporting}>
-                          <Download size={15} />
-                          <span>{isExporting ? 'Exporting...' : 'Export'}</span>
-                        </button>
-
-                        <div className="save-pill compact-pill">
-                          <Save size={14} />
-                          <span>{lastSavedAt ? `Saved ${lastSavedAt}` : 'Auto-save ready'}</span>
+                        <div className="voice-control-row">
+                          <label htmlFor="voice-language-select">Language</label>
+                          <select id="voice-language-select" value={voiceLanguage} onChange={handleVoiceLanguageChange}>
+                            {VOICE_LANGUAGE_OPTIONS.map((languageOption) => (
+                              <option key={languageOption.id} value={languageOption.id}>{languageOption.label}</option>
+                            ))}
+                          </select>
                         </div>
 
-                        <div className={`status-pill compact-pill ${isListening ? 'active' : ''}`}>
-                          <span className="status-dot" />
-                          <span>{isListening ? 'Listening...' : statusMessage}</span>
+                        <div className="voice-waveform" aria-hidden="true">
+                          {Array.from({ length: 12 }).map((_, index) => {
+                            const phase = ((index % 6) + 1) / 6;
+                            const barScale = isVoiceListening ? clampNumber(0.28 + voiceLevel * (0.5 + phase), 0.2, 1) : 0.18;
+                            return (
+                              <span
+                                key={`voice-bar-${index}`}
+                                className="voice-wave-bar"
+                                style={{ '--voice-bar-scale': barScale, '--voice-bar-delay': `${index * 60}ms` }}
+                              />
+                            );
+                          })}
+                        </div>
+
+                        <div className="voice-control-caption">
+                          {interimVoiceTranscript || lastVoiceTranscript || 'Try: "Highlight", "Go to page 15", "Remind me tomorrow to review notes", "पुढचे पान".'}
                         </div>
                       </div>
                     </div>
@@ -2296,54 +4289,115 @@ function App() {
                 </div>
               </div>
 
-              <div className="viewer-shell" ref={viewerShellRef} onScroll={handleViewerScroll}>
-                <div className="page-stack">
-                  {pages.map((page) => {
-                    const isInRenderWindow = renderWindowPageNumbers.includes(page.pageNumber);
-
-                    return (
-                      <section
-                        key={page.pageNumber}
-                        ref={(node) => {
-                          pageStageRefs.current[page.pageNumber] = node;
-                        }}
-                        className={`page-stage ${activePageNumber === page.pageNumber ? 'active' : ''}`}
-                        onPointerEnter={() => setActivePageNumber(page.pageNumber)}
-                        onClick={() => setActivePageNumber(page.pageNumber)}
-                      >
-                        <div className="page-badge">Page {page.pageNumber}</div>
-                        <div className="stack-stage" style={{ width: `${page.width}px`, height: `${page.height}px` }}>
-                          {page.kind === 'pdf' ? (
-                            <div className={`stack-layer pdf-layer ${isInRenderWindow ? 'active' : 'deferred'}`}>
-                              {!isInRenderWindow ? <div className="deferred-page-hint">Rendering resumes when this page enters the active window.</div> : null}
-                              <canvas
-                                className="pdf-canvas"
-                                ref={(node) => {
-                                  pdfCanvasRefs.current[page.pageNumber] = node;
-                                }}
-                                aria-label={`PDF page ${page.pageNumber}`}
-                              />
-                            </div>
-                          ) : (
-                            <div className="stack-layer notebook-layer" aria-label={`Blank ruled page ${page.pageNumber}`} />
-                          )}
-
-                          <canvas
-                            ref={(node) => {
-                              inkCanvasRefs.current[page.pageNumber] = node;
-                            }}
-                            className={`stack-layer ink-layer ${activeTool === 'eraser' ? 'eraser-cursor' : ''}`}
-                            aria-label={`Handwriting canvas page ${page.pageNumber}`}
-                            onPointerDown={handlePointerDown(page.pageNumber)}
-                            onPointerMove={handlePointerMove(page.pageNumber)}
-                            onPointerUp={handlePointerUp(page.pageNumber)}
-                            onPointerLeave={handlePointerUp(page.pageNumber)}
-                          />
-                        </div>
-                      </section>
-                    );
-                  })}
+              {currentView === 'editor' && miniToolbar.visible ? (
+                <div className="mini-tool-float" style={{ left: `${miniToolbar.x}px`, top: `${miniToolbar.y}px` }} role="toolbar" aria-label="Quick mini toolbar">
+                  <button type="button" className={`mini-tool-button ${activeTool === 'pen' ? 'selected' : ''}`} onClick={() => activateTool('pen', false)}>
+                    Pen
+                  </button>
+                  <button type="button" className={`mini-tool-button ${activeTool === 'highlighter' ? 'selected' : ''}`} onClick={() => activateTool('highlighter', false)}>
+                    Mark
+                  </button>
+                  <button type="button" className={`mini-tool-button ${activeTool === 'eraser' ? 'selected' : ''}`} onClick={() => activateTool('eraser', false)}>
+                    Erase
+                  </button>
+                  <button type="button" className={`mini-tool-button ${activeTool === 'shape' ? 'selected' : ''}`} onClick={() => activateTool('shape', false)}>
+                    Shape
+                  </button>
+                  <button type="button" className={`mini-tool-button ${activeTool === 'lasso' ? 'selected' : ''}`} onClick={() => activateTool('lasso', false)}>
+                    Select
+                  </button>
+                  <button type="button" className="mini-tool-button" onClick={handleUndo} disabled={!activePageAnnotations.strokes.length}>
+                    Undo
+                  </button>
                 </div>
+              ) : null}
+
+              <div className={`viewer-layout notes-layout-${notesLayout}`}>
+                {notesLayout === 'classic' ? (
+                  <aside className="page-thumbnail-strip" aria-label="Page thumbnails">
+                  <div className="thumbnail-strip-head">
+                    <span>Pages</span>
+                    <strong>{pageCount}</strong>
+                  </div>
+
+                  <div className="thumbnail-list">
+                    {pages.map((page) => {
+                      const pageStrokeCount = pageStrokeCountMap[page.pageNumber] ?? 0;
+
+                      return (
+                        <button
+                          key={`thumb-${page.pageNumber}`}
+                          type="button"
+                          className={`thumbnail-card ${activePageNumber === page.pageNumber ? 'active' : ''}`}
+                          onClick={() => scrollToPage(page.pageNumber)}
+                          aria-label={`Go to page ${page.pageNumber}`}
+                        >
+                          <span className={`thumbnail-preview ${page.kind === 'pdf' ? 'pdf' : 'notebook'}`}>
+                            <span className="thumbnail-page-number">{page.pageNumber}</span>
+                          </span>
+                          <span className="thumbnail-meta">
+                            <strong>Page {page.pageNumber}</strong>
+                            <span>{page.kind === 'pdf' ? 'PDF page' : 'Notebook page'}</span>
+                            <span>{pageStrokeCount ? `${pageStrokeCount} stroke${pageStrokeCount > 1 ? 's' : ''}` : 'No ink yet'}</span>
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  </aside>
+                ) : null}
+
+                <div className={`viewer-shell ${splitViewEnabled ? 'split-view' : ''} ${scrollDirection === 'horizontal' ? 'scroll-horizontal' : ''}`} ref={viewerShellRef} onScroll={handleViewerScroll}>
+                  <div className="page-stack" style={{ transform: `scale(${viewScale}) rotate(${rotationDegrees}deg)` }}>
+                    {pages.map((page) => {
+                      const isInRenderWindow = renderWindowPageNumbers.includes(page.pageNumber);
+
+                      return (
+                        <section
+                          key={page.pageNumber}
+                          ref={(node) => {
+                            pageStageRefs.current[page.pageNumber] = node;
+                          }}
+                          data-page-number={page.pageNumber}
+                          className={`page-stage ${activePageNumber === page.pageNumber ? 'active' : ''}`}
+                          onPointerEnter={() => setActivePageNumber(page.pageNumber)}
+                          onClick={() => setActivePageNumber(page.pageNumber)}
+                        >
+                          <div className="page-badge">Page {page.pageNumber}</div>
+                          <div className="stack-stage" style={{ width: `${page.width}px`, height: `${page.height}px`, '--page-bg-color': pageBackgroundColor }}>
+                            {page.kind === 'pdf' ? (
+                              <div className={`stack-layer pdf-layer ${isInRenderWindow ? 'active' : 'deferred'}`}>
+                                {!isInRenderWindow ? <div className="deferred-page-hint">Rendering resumes when this page enters the active window.</div> : null}
+                                <canvas
+                                  className="pdf-canvas"
+                                  ref={(node) => {
+                                    pdfCanvasRefs.current[page.pageNumber] = node;
+                                  }}
+                                  aria-label={`PDF page ${page.pageNumber}`}
+                                />
+                              </div>
+                            ) : (
+                              <div className={`stack-layer notebook-layer template-${paperTemplate}`} aria-label={`Blank ruled page ${page.pageNumber}`} />
+                            )}
+
+                            <canvas
+                              ref={(node) => {
+                                inkCanvasRefs.current[page.pageNumber] = node;
+                              }}
+                              className={`stack-layer ink-layer ${activeTool === 'eraser' ? 'eraser-cursor' : ''}`}
+                              aria-label={`Handwriting canvas page ${page.pageNumber}`}
+                              onPointerDown={handlePointerDown(page.pageNumber)}
+                              onPointerMove={handlePointerMove(page.pageNumber)}
+                              onPointerUp={handlePointerUp(page.pageNumber)}
+                              onPointerLeave={handlePointerUp(page.pageNumber)}
+                            />
+                          </div>
+                        </section>
+                      );
+                    })}
+                  </div>
+                </div>
+
               </div>
             </div>
 
@@ -2358,7 +4412,11 @@ function App() {
               </div>
               <div>
                 <span className="meta-label">Tooling</span>
-                <strong>{activeTool === 'highlighter' ? 'Highlighter active' : activeTool === 'eraser' ? 'Stroke eraser active' : 'Pen active'}</strong>
+                <strong>{activeTool === 'highlighter' ? 'Highlighter active' : activeTool === 'eraser' ? 'Stroke eraser active' : activeTool === 'shape' ? `Shape tool: ${shapeType}` : activeTool === 'lasso' ? 'Lasso select active' : 'Pen active'}</strong>
+              </div>
+              <div>
+                <span className="meta-label">Voice transcript</span>
+                <strong>{lastVoiceTranscript || 'No voice command captured yet'}</strong>
               </div>
               <div>
                 <span className="meta-label">Persistence</span>
@@ -2368,35 +4426,125 @@ function App() {
                 <span className="meta-label">Ink summary</span>
                 <strong>{totalStrokeCount} saved strokes</strong>
               </div>
-              <div>
-                <span className="meta-label">Voice reminders</span>
-                <strong>{latestReminder ? latestReminder.text : 'No reminders yet'}</strong>
-                <span className="meta-subcopy">{reminders.length ? `${reminders.length} saved • page ${latestReminder.pageNumber}` : 'Say “Reminder …” while the mic is live'}</span>
-              </div>
             </div>
-
-            <section className="voice-notes-panel" aria-label="Voice notes">
-              <div className="voice-notes-head">
-                <div>
-                  <span className="meta-label">Voice Notes</span>
-                  <strong>Dictation pad</strong>
-                </div>
-                <span className={`voice-notes-badge ${isListening ? 'active' : ''}`}>{isListening ? 'Typing from mic' : 'Manual + mic'}</span>
-              </div>
-              <textarea
-                className="voice-notes-input"
-                value={dictatedNotes}
-                onChange={handleDictatedNotesChange}
-                placeholder="Speak while the mic is on, or type here directly. Normal speech is added here like dictated notes."
-              />
-              <div className="voice-notes-footer">
-                <span className="meta-subcopy">{liveTranscript ? `Hearing: ${liveTranscript}` : 'Commands stay active only for exact phrases like “Next”, “Highlight”, and “Reminder …”.'}</span>
-              </div>
-            </section>
           </>
         )}
 
-        <input ref={fileInputRef} type="file" accept="application/pdf" hidden onChange={handleFileChange} />
+        {showOnboardingTour ? (
+          <div className="onboarding-backdrop" role="dialog" aria-label="Welcome tour">
+            <div className="onboarding-card">
+              <p className="eyebrow">Welcome</p>
+              <h2>Build your workflow in VoxNotes</h2>
+              <p>Start with the sample notebook, tune your toolbar shortcuts, and bookmark key pages for quick revision.</p>
+              <div className="onboarding-actions">
+                <button type="button" className="overlay-button" onClick={launchSampleNotebook}>Open Sample</button>
+                <button
+                  type="button"
+                  className="overlay-button compact"
+                  onClick={() => {
+                    setShowOnboardingTour(false);
+                    if (typeof window !== 'undefined') {
+                      window.localStorage.setItem(ONBOARDING_STORAGE_KEY, 'true');
+                    }
+                  }}
+                >
+                  Skip tour
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {showNotebookSettings ? (
+          <div className="settings-sheet-backdrop" role="dialog" aria-label="Notebook settings" onClick={() => setShowNotebookSettings(false)}>
+            <section className="settings-sheet" onClick={(event) => event.stopPropagation()}>
+              <div className="settings-sheet-head">
+                <button type="button" className="overlay-button compact" onClick={() => setShowNotebookSettings(false)}>
+                  <ChevronLeft size={16} />
+                </button>
+                <h3>Page template</h3>
+              </div>
+
+              <label className="sheet-toggle-row">
+                <span>Apply to all pages</span>
+                <input type="checkbox" checked={applyTemplateToAllPages} onChange={(event) => setApplyTemplateToAllPages(event.target.checked)} />
+              </label>
+
+              <div className="settings-sheet-section">
+                <div className="settings-section-title-row">
+                  <strong>Default templates</strong>
+                </div>
+                <div className="template-grid">
+                  {PAGE_TEMPLATE_OPTIONS.map((templateOption) => (
+                    <button
+                      key={templateOption.id}
+                      type="button"
+                      className={`template-card ${paperTemplate === templateOption.id ? 'selected' : ''}`}
+                      onClick={() => applyTemplateSelection(templateOption.id)}
+                    >
+                      <span className={`template-preview template-${templateOption.id}`} />
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="settings-sheet-section">
+                <strong>Scroll direction</strong>
+                <div className="segmented-control">
+                  <button type="button" className={scrollDirection === 'vertical' ? 'selected' : ''} onClick={() => setScrollDirection('vertical')}>Vertical</button>
+                  <button type="button" className={scrollDirection === 'horizontal' ? 'selected' : ''} onClick={() => setScrollDirection('horizontal')}>Horizontal</button>
+                </div>
+              </div>
+
+              <div className="settings-sheet-section">
+                <strong>Background colour</strong>
+                <div className="background-swatch-row">
+                  {PAGE_BACKGROUND_SWATCHES.map((swatch) => (
+                    <button
+                      key={swatch}
+                      type="button"
+                      className={`background-swatch ${pageBackgroundColor === swatch ? 'selected' : ''}`}
+                      style={{ backgroundColor: swatch }}
+                      onClick={() => setPageBackgroundColor(swatch)}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              <div className="settings-sheet-section">
+                <strong>Cover</strong>
+                <div className="cover-grid">
+                  {COVER_VARIANTS.map((coverOption) => (
+                    <button
+                      key={coverOption.id}
+                      type="button"
+                      className={`cover-card ${coverOption.className} ${coverVariant === coverOption.id ? 'selected' : ''}`}
+                      onClick={() => setCoverVariant(coverOption.id)}
+                      aria-label={coverOption.label}
+                    />
+                  ))}
+                </div>
+              </div>
+            </section>
+          </div>
+        ) : null}
+
+        <div className="toast-tray" aria-live="polite" aria-label="Notifications">
+          {toastItems.slice(-4).map((toastItem) => (
+            <div key={toastItem.id} className="toast-item">
+              <span>{toastItem.message}</span>
+              <button type="button" className="mini-icon-button" onClick={() => setToastItems((currentItems) => currentItems.filter((candidate) => candidate.id !== toastItem.id))}>×</button>
+            </div>
+          ))}
+        </div>
+
+        {voiceTranscriptToast ? (
+          <div className="voice-transcript-toast" aria-live="polite">
+            <span>{voiceTranscriptToast}</span>
+          </div>
+        ) : null}
+
+        <input ref={fileInputRef} type="file" accept=".pdf,application/pdf" hidden onChange={handleFileChange} />
       </main>
     </div>
   );

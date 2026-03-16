@@ -1,6 +1,7 @@
 const DATABASE_NAME = 'voxnotes-ai';
-const DATABASE_VERSION = 1;
+const DATABASE_VERSION = 2;
 const STORE_NAME = 'annotation-sessions';
+const REMINDER_STORE_NAME = 'voice-reminders';
 
 let databasePromise;
 
@@ -23,6 +24,12 @@ const openDatabase = async () => {
         if (!database.objectStoreNames.contains(STORE_NAME)) {
           const store = database.createObjectStore(STORE_NAME, { keyPath: 'documentId' });
           store.createIndex('updatedAt', 'updatedAt', { unique: false });
+        }
+
+        if (!database.objectStoreNames.contains(REMINDER_STORE_NAME)) {
+          const reminderStore = database.createObjectStore(REMINDER_STORE_NAME, { keyPath: 'reminderId' });
+          reminderStore.createIndex('createdAt', 'createdAt', { unique: false });
+          reminderStore.createIndex('dueAt', 'dueAt', { unique: false });
         }
       };
 
@@ -113,6 +120,31 @@ export const listStoredAnnotations = async () => {
 
     request.onerror = () => {
       reject(request.error || new Error('Unable to list annotation sessions from IndexedDB.'));
+    };
+  });
+};
+
+export const saveReminder = async (reminderRecord) => {
+  if (!reminderRecord?.reminderId) {
+    return;
+  }
+
+  const database = await openDatabase();
+
+  if (!database) {
+    throw new Error('IndexedDB is not available in this browser.');
+  }
+
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction(REMINDER_STORE_NAME, 'readwrite');
+    const request = transaction.objectStore(REMINDER_STORE_NAME).put(reminderRecord);
+
+    request.onsuccess = () => {
+      resolve(reminderRecord);
+    };
+
+    request.onerror = () => {
+      reject(request.error || new Error('Unable to save reminder to IndexedDB.'));
     };
   });
 };
